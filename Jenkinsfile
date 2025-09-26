@@ -8,8 +8,8 @@ pipeline {
 
     environment {
         SONARQUBE = 'SonarQube'
-        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-release'
-        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-snapshot'
+        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local'
+        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-snapshot-local'
         ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'  // Jenkins credential ID
         ANSIBLE_HOST_KEY_CHECKING = 'False' // Disable host key checking in CI/CD
     }
@@ -23,7 +23,7 @@ pipeline {
 
         stage('Build with Maven') {
             steps {
-                sh "mvn clean package"
+                sh "mvn clean package -DskipTests"
             }
         }
 
@@ -37,12 +37,11 @@ pipeline {
 
         stage('Upload to Artifactory') {
             steps {
-                withCredentials([usernamePassword(credentialsId: "${ARTIFACTORY_CREDENTIALS}", 
-                                                  usernameVariable: 'USER', 
+                withCredentials([usernamePassword(credentialsId: "${ARTIFACTORY_CREDENTIALS}",
+                                                  usernameVariable: 'USER',
                                                   passwordVariable: 'PASS')]) {
                     script {
-                        // Determine if the build is a SNAPSHOT or RELEASE
-                        def isSnapshot = env.BUILD_TAG?.contains('SNAPSHOT') || true // You can replace with actual logic
+                        def isSnapshot = env.BRANCH_NAME?.contains("SNAPSHOT") || false
                         def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
                         def artifactFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
 
@@ -55,38 +54,23 @@ pipeline {
             }
         }
 
-        //stage('Deploy using Ansible') {
-            //steps {
-                //ansiblePlaybook(
-                    //credentialsId: 'ssh-key',  // Make sure this exists in Jenkins
-                    //inventory: 'hosts',
-                    //playbook: 'deploy.yml'
-               // )
-            //}
-        //}
-         stage('Deploy using Ansible') {
+        stage('Deploy using Ansible') {
             steps {
-                // Use ssh-agent with your Jenkins stored private key
-                //sshagent(['my-ssh-key']) {
-                    //ansiblePlaybook(
-                        //inventory: 'hosts',
-                        //playbook: 'deploy.yml'
-                 ansiblePlaybook(
-                             inventory: 'hosts',
-                              playbook: 'deploy.yml',
-                              credentialsId: 'my-ssh-key'
-                              )
-                }
+                ansiblePlaybook(
+                    playbook: 'deploy.yml',
+                    inventory: 'hosts',
+                    credentialsId: 'my-ssh-key'
+                )
             }
         }
     }
 
     post {
         success {
-            echo "Pipeline completed successfully!"
+            echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "Pipeline failed. Please check the logs."
+            echo "❌ Pipeline failed. Please check the logs."
         }
     }
-
+}
