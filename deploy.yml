@@ -22,26 +22,24 @@
 - hosts: webservers
   become: yes
   vars:
-    tomcat_version: "10.1.27"  # Change to the version you want
-    tomcat_install_dir: "/opt/tomcat"
-    tomcat_service_user: "ubuntu"
-    tomcat_port: 8081         # Change to your desired port
-    war_source: "target/myapp-1.0.0.war"
-    war_dest: "{{ tomcat_install_dir }}/webapps/myapp.war"
+    java_package: openjdk-17-jdk
+    tomcat_version: 10.1.26
+    tomcat_install_dir: /opt/tomcat
+    tomcat_user: ubuntu
+    tomcat_group: ubuntu
+    tomcat_port: 8085
+    tomcat_url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
 
   tasks:
-
     - name: Update apt and install dependencies
       apt:
-        name: 
-          - openjdk-17-jdk
-          - wget
-        state: present
         update_cache: yes
+        name: "{{ java_package }}"
+        state: present
 
     - name: Download Tomcat
       get_url:
-        url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        url: "{{ tomcat_url }}"
         dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
 
     - name: Extract Tomcat
@@ -49,25 +47,27 @@
         src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
         dest: /opt/
         remote_src: yes
+      notify:
+        - Set permissions
 
-    - name: Rename Tomcat directory
+    - name: Rename Tomcat folder
       command: mv /opt/apache-tomcat-{{ tomcat_version }} {{ tomcat_install_dir }}
       args:
-        creates: "{{ tomcat_install_dir }}"
+        removes: "{{ tomcat_install_dir }}"
+      notify:
+        - Set permissions
 
-    - name: Make scripts executable
+    - name: Set executable permissions for scripts
       file:
-        path: "{{ tomcat_install_dir }}/bin/{{ item }}"
-        mode: '0755'
-      loop:
-        - startup.sh
-        - shutdown.sh
+        path: "{{ tomcat_install_dir }}/bin/"
+        recurse: yes
+        mode: "0755"
 
-    - name: Configure Tomcat port
+    - name: Update Tomcat port
       lineinfile:
         path: "{{ tomcat_install_dir }}/conf/server.xml"
-        regexp: '(<Connector port=").*?(")'
-        line: '\1{{ tomcat_port }}\2'
+        regexp: 'port="8080"'
+        line: 'port="{{ tomcat_port }}"'
         backrefs: yes
 
     - name: Create systemd service for Tomcat
@@ -80,8 +80,8 @@
 
           [Service]
           Type=forking
-          User={{ tomcat_service_user }}
-          Group={{ tomcat_service_user }}
+          User={{ tomcat_user }}
+          Group={{ tomcat_group }}
           Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           Environment=CATALINA_PID={{ tomcat_install_dir }}/temp/tomcat.pid
           Environment=CATALINA_HOME={{ tomcat_install_dir }}
@@ -93,28 +93,22 @@
           [Install]
           WantedBy=multi-user.target
 
-    - name: Reload systemd
-      command: systemctl daemon-reload
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
 
     - name: Enable and start Tomcat
       systemd:
         name: tomcat
-        state: started
         enabled: yes
-
-    - name: Stop Tomcat before deploying WAR
-      systemd:
-        name: tomcat
-        state: stopped
-
-    - name: Copy WAR to Tomcat webapps
-      copy:
-        src: "{{ war_source }}"
-        dest: "{{ war_dest }}"
-        mode: '0644'
-
-    - name: Start Tomcat
-      systemd:
-        name: tomcat
         state: started
+
+  handlers:
+    - name: Set permissions
+      file:
+        path: "{{ tomcat_install_dir }}"
+        recurse: yes
+        owner: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+        mode: "0755"
 
