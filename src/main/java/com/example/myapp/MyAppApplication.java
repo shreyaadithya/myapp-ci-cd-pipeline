@@ -23,7 +23,7 @@ public class MyAppApplication extends SpringBootServletInitializer {
     class HelloController {
         @GetMapping("/")
         public String hello() {
-            return "Hello, CI/CD Pipeline is working!";
+            return "Bonda Juice kudityaa?? kudityaaa??!";
         }
     }
 }
