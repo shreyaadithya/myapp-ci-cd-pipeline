@@ -1,21 +1,21 @@
-//- hosts: webservers
-  //become: yes
-  //tasks:
-    //- name: Stop Tomcat
-      //systemd:
-        //name: tomcat
-        //state: stopped
+#- hosts: webservers
+  #become: yes
+  #tasks:
+    #- name: Stop Tomcat
+      #systemd:
+        #name: tomcat
+        #state: stopped
 
-    //- name: Copy WAR to Tomcat webapps
-      //copy:
-        //src: target/myapp-1.0.0.war
-        //dest: /opt/tomcat/webapps/myapp.war
-        //mode: '0644'
+    #- name: Copy WAR to Tomcat webapps
+      #copy:
+        #src: target/myapp-1.0.0.war
+        #dest: /opt/tomcat/webapps/myapp.war
+        #mode: '0644'
 
-    //- name: Start Tomcat
-      //systemd:
-        //name: tomcat
-        //state: started 
+    #- name: Start Tomcat
+      #systemd:
+        #name: tomcat
+        #state: started 
 
 
         - hosts: webservers
