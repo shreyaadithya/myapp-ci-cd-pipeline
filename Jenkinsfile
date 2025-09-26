@@ -1,13 +1,17 @@
 pipeline {
     agent any
 
+    tools {
+        maven 'Maven-3.8.8'
+        jdk 'jdk-17'
+    }
+
     environment {
-        MVN_HOME = tool name: 'Maven', type: 'maven'
-        ARTIFACTORY_USER = credentials('artifactory_user')   // Jenkins credential ID
-        ARTIFACTORY_API_KEY = credentials('artifactory_api_key')
-        ARTIFACT_NAME = "myapp-1.0-SNAPSHOT.war"
-        ARTIFACTORY_REPO = "libs-snapshot-local"
-        ARTIFACTORY_URL = "https://trial6dfohe.jfrog.io/artifactory/${ARTIFACTORY_REPO}/${ARTIFACT_NAME}"
+        SONARQUBE = 'SonarQube'
+        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local'
+        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-snapshot-local'
+        ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'  // Jenkins credential ID
+        ANSIBLE_HOST_KEY_CHECKING = 'False' // Disable host key checking in CI/CD
     }
 
     stages {
@@ -17,31 +21,36 @@ pipeline {
             }
         }
 
-        stage('Build') {
+        stage('Build with Maven') {
             steps {
-                sh "${MVN_HOME}/bin/mvn clean package -DskipTests"
+                sh "mvn clean package -DskipTests"
             }
         }
 
         stage('SonarQube Analysis') {
-            environment {
-                SONAR_HOST_URL = 'http://54.91.93.239:9000'
-                SONAR_AUTH_TOKEN = credentials('sonarqube_token')
-            }
             steps {
-                withSonarQubeEnv('SonarQube') {
-                    sh "${MVN_HOME}/bin/mvn sonar:sonar -Dsonar.projectKey=myapp"
+                withSonarQubeEnv("${SONARQUBE}") {
+                    sh "mvn sonar:sonar -Dsonar.projectKey=myapp"
                 }
             }
         }
 
         stage('Upload to Artifactory') {
             steps {
-                sh """
-                    curl -u ${ARTIFACTORY_USER}:${ARTIFACTORY_API_KEY} \
-                         -T target/${ARTIFACT_NAME} \
-                         ${ARTIFACTORY_URL}
-                """
+                withCredentials([usernamePassword(credentialsId: "${ARTIFACTORY_CREDENTIALS}",
+                                                  usernameVariable: 'USER',
+                                                  passwordVariable: 'PASS')]) {
+                    script {
+                        def isSnapshot = env.BRANCH_NAME?.contains("SNAPSHOT") || false
+                        def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
+                        def artifactFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
+
+                        sh """
+                            echo "Uploading ${artifactFile} to ${artifactRepo}"
+                            curl -u $USER:$PASS -T target/${artifactFile} "${artifactRepo}/${artifactFile}"
+                        """
+                    }
+                }
             }
         }
 
@@ -50,7 +59,7 @@ pipeline {
                 ansiblePlaybook(
                     playbook: 'deploy.yml',
                     inventory: 'hosts',
-                    extras: "-e artifactory_user=${ARTIFACTORY_USER} -e artifactory_api_key=${ARTIFACTORY_API_KEY} -e artifact_name=${ARTIFACT_NAME}"
+                    credentialsId: 'my-ssh-key'
                 )
             }
         }
@@ -58,10 +67,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline succeeded"
+            echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "❌ Pipeline failed. Check logs."
+            echo "❌ Pipeline failed. Please check the logs."
         }
     }
 }
