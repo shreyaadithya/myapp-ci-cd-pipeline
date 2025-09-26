@@ -76,8 +76,6 @@ pipeline {
                               playbook: 'deploy.yml',
                               credentialsId: 'my-ssh-key'
                               )
-   
-                    )
                 }
             }
         }
