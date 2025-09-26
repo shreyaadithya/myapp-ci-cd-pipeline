@@ -27,6 +27,16 @@ pipeline {
             }
         }
 
+        stage('Diagnose Build Output') {
+            steps {
+                sh """
+                    echo "=== Checking build output ==="
+                    ls -la target/
+                    find target/ -name '*.war' -type f
+                """
+            }
+        }
+
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv("${SONARQUBE}") {
@@ -41,14 +51,45 @@ pipeline {
                                                   usernameVariable: 'USER',
                                                   passwordVariable: 'PASS')]) {
                     script {
-                        def isSnapshot = env.BRANCH_NAME?.contains("SNAPSHOT") || false
+                        // List files for debugging
+                        sh "ls -la target/"
+                        
+                        def isSnapshot = env.BRANCH_NAME?.contains("SNAPSHOT") || env.BRANCH_NAME == "main"
                         def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
-                        def artifactFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
-
-                        sh """
-                            echo "Uploading ${artifactFile} to ${artifactRepo}"
-                            curl -u $USER:$PASS -T target/${artifactFile} "${artifactRepo}/${artifactFile}"
-                        """
+                        
+                        // Dynamically find the WAR file
+                        def warFiles = sh(script: "find target/ -name '*.war' -type f", returnStdout: true).trim()
+                        
+                        if (warFiles) {
+                            def warFile = warFiles.split('\n')[0].trim()
+                            def artifactFile = warFile.replace('target/', '')
+                            
+                            sh """
+                                echo "Found WAR file: ${warFile}"
+                                echo "Uploading ${artifactFile} to ${artifactRepo}"
+                                curl -u $USER:$PASS -T ${warFile} "${artifactRepo}/${artifactFile}"
+                            """
+                        } else {
+                            // Fallback: try common WAR file names
+                            def commonWarNames = ["myapp.war", "myapp-1.0.war", "myapp-1.0-SNAPSHOT.war"]
+                            def foundWar = false
+                            
+                            for (warName in commonWarNames) {
+                                def warPath = "target/${warName}"
+                                if (fileExists(warPath)) {
+                                    sh """
+                                        echo "Uploading ${warName} to ${artifactRepo}"
+                                        curl -u $USER:$PASS -T ${warPath} "${artifactRepo}/${warName}"
+                                    """
+                                    foundWar = true
+                                    break
+                                }
+                            }
+                            
+                            if (!foundWar) {
+                                error "No WAR file found in target directory! Available files: ${sh(script: 'ls -la target/', returnStdout: true)}"
+                            }
+                        }
                     }
                 }
             }
