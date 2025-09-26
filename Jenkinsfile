@@ -8,8 +8,9 @@ pipeline {
 
     environment {
         SONARQUBE = 'SonarQube'
-        ARTIFACTORY_URL = 'https://trial6dfohe.jfrog.io/artifactory' // Replace with your Artifactory URL
-        ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'       // Jenkins credential ID
+        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-release'
+        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-snapshot'
+        ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'  // Jenkins credential ID
     }
 
     stages {
@@ -38,10 +39,17 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: "${ARTIFACTORY_CREDENTIALS}", 
                                                   usernameVariable: 'USER', 
                                                   passwordVariable: 'PASS')]) {
-                    sh """
-                        curl -u $USER:$PASS -T target/myapp-1.0-SNAPSHOT.war \
-                        "${ARTIFACTORY_URL}/libs-snapshot-local/myapp-1.0-SNAPSHOT.war"
-                    """
+                    script {
+                        // Determine if the build is a SNAPSHOT or RELEASE
+                        def isSnapshot = env.BUILD_TAG?.contains('SNAPSHOT') || true // You can replace with actual logic
+                        def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
+                        def artifactFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
+
+                        sh """
+                            echo "Uploading ${artifactFile} to ${artifactRepo}"
+                            curl -u $USER:$PASS -T target/${artifactFile} "${artifactRepo}/${artifactFile}"
+                        """
+                    }
                 }
             }
         }
