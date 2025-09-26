@@ -20,7 +20,7 @@
 
 ---
 - name: Deploy myapp to Tomcat
-  hosts: target-node
+  hosts: all
   become: yes
   vars:
     tomcat_path: /opt/tomcat
