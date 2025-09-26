@@ -8,10 +8,10 @@ pipeline {
 
     environment {
         SONARQUBE = 'SonarQube'
-        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local'
-        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-snapshot-local'
+        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-release'
+        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-snapshot'
         ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'  // Jenkins credential ID
-        ANSIBLE_HOST_KEY_CHECKING = 'False' // Disable host key checking in CI/CD
+        ANSIBLE_HOST_KEY_CHECKING = 'False'
     }
 
     stages {
@@ -23,7 +23,7 @@ pipeline {
 
         stage('Build with Maven') {
             steps {
-                sh "mvn clean package -DskipTests"
+                sh "mvn clean package"
             }
         }
 
@@ -41,9 +41,15 @@ pipeline {
                                                   usernameVariable: 'USER',
                                                   passwordVariable: 'PASS')]) {
                     script {
-                        def isSnapshot = env.BRANCH_NAME?.contains("SNAPSHOT") || false
+                        // Extract actual version from pom.xml
+                        def version = sh(
+                            script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout",
+                            returnStdout: true
+                        ).trim()
+
+                        def isSnapshot = version.endsWith("SNAPSHOT")
                         def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
-                        def artifactFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
+                        def artifactFile = "myapp-${version}.war"
 
                         sh """
                             echo "Uploading ${artifactFile} to ${artifactRepo}"
@@ -57,8 +63,8 @@ pipeline {
         stage('Deploy using Ansible') {
             steps {
                 ansiblePlaybook(
-                    playbook: 'deploy.yml',
                     inventory: 'hosts',
+                    playbook: 'deploy.yml',
                     credentialsId: 'my-ssh-key'
                 )
             }
@@ -67,10 +73,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline completed successfully!"
+            echo "Pipeline completed successfully!"
         }
         failure {
-            echo "❌ Pipeline failed. Please check the logs."
+            echo "Pipeline failed. Please check the logs."
         }
     }
 }
