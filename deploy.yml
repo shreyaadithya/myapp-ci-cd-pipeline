@@ -1,63 +1,62 @@
-#- hosts: webservers
-  #become: yes
-  #tasks:
-    #- name: Stop Tomcat
-      #systemd:
-        #name: tomcat
-        #state: stopped
-
-    #- name: Copy WAR to Tomcat webapps
-      #copy:
-        #src: target/myapp-1.0.0.war
-        #dest: /opt/tomcat/webapps/myapp.war
-        #mode: '0644'
-
-    #- name: Start Tomcat
-      #systemd:
-        #name: tomcat
-        #state: started 
-
-
-- hosts: webservers
+---
+- name: Install and Configure Tomcat
+  hosts: webservers
   become: yes
   vars:
     tomcat_version: 10.1.30
     tomcat_url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+    artifactory_base: "https://trial6dfohe.jfrog.io/artifactory"
+    app_version: "1.0"
 
   tasks:
-    - name: Update apt and install dependencies
+    - name: Update apt cache and install dependencies
       apt:
         update_cache: yes
         name:
           - openjdk-17-jdk
           - wget
+          - curl
         state: present
+
+    - name: Check if Tomcat is already installed
+      stat:
+        path: /opt/tomcat
+      register: tomcat_installed
 
     - name: Download Tomcat
       get_url:
         url: "{{ tomcat_url }}"
         dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        mode: '0755'
+      when: not tomcat_installed.stat.exists
 
     - name: Extract Tomcat
       unarchive:
         src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
         dest: /opt/
         remote_src: yes
+        owner: ubuntu
+        group: ubuntu
+      when: not tomcat_installed.stat.exists
 
-    - name: Symlink Tomcat
+    - name: Create Tomcat symlink
       file:
         src: "/opt/apache-tomcat-{{ tomcat_version }}"
         dest: /opt/tomcat
         state: link
         force: yes
+        owner: ubuntu
+        group: ubuntu
+      when: not tomcat_installed.stat.exists
 
     - name: Change Tomcat port to 8081
       replace:
         path: /opt/tomcat/conf/server.xml
         regexp: 'port="8080"'
         replace: 'port="8081"'
+        backup: yes
 
-    - name: Create systemd service
+    - name: Create Tomcat systemd service file
       copy:
         dest: /etc/systemd/system/tomcat.service
         content: |
@@ -76,19 +75,97 @@
           ExecStart=/opt/tomcat/bin/startup.sh
           ExecStop=/opt/tomcat/bin/shutdown.sh
           Restart=on-failure
+          RestartSec=10
 
           [Install]
           WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
 
-    - name: Reload systemd
-      command: systemctl daemon-reload
+    - name: Set proper permissions on Tomcat directories
+      file:
+        path: /opt/tomcat
+        owner: ubuntu
+        group: ubuntu
+        recurse: yes
 
-    - name: Enable Tomcat
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable Tomcat service
       systemd:
         name: tomcat
         enabled: yes
 
-    - name: Start Tomcat
+    - name: Stop Tomcat service if running
+      systemd:
+        name: tomcat
+        state: stopped
+      ignore_errors: yes
+
+    - name: Clean existing webapps
+      file:
+        path: /opt/tomcat/webapps/myapp.war
+        state: absent
+      ignore_errors: yes
+
+    - name: Clean existing exploded deployment
+      file:
+        path: /opt/tomcat/webapps/myapp
+        state: absent
+      ignore_errors: yes
+
+    - name: Download WAR file from Artifactory (Release)
+      get_url:
+        url: "{{ artifactory_base }}/libs-release-local/myapp-{{ app_version }}.war"
+        dest: /opt/tomcat/webapps/myapp.war
+        mode: '0644'
+        owner: ubuntu
+        group: ubuntu
+      when: "'SNAPSHOT' not in app_version"
+
+    - name: Download WAR file from Artifactory (Snapshot)
+      get_url:
+        url: "{{ artifactory_base }}/libs-snapshot-local/myapp-{{ app_version }}-SNAPSHOT.war"
+        dest: /opt/tomcat/webapps/myapp.war
+        mode: '0644'
+        owner: ubuntu
+        group: ubuntu
+      when: "'SNAPSHOT' in app_version"
+
+    - name: Start Tomcat service
       systemd:
         name: tomcat
         state: started
+
+    - name: Wait for Tomcat to start
+      wait_for:
+        port: 8081
+        delay: 10
+        state: started
+        timeout: 60
+
+    - name: Verify deployment
+      uri:
+        url: "http://localhost:8081/myapp"
+        method: GET
+        status_code: 200
+        timeout: 30
+      register: deployment_result
+      until: deployment_result.status == 200
+      retries: 10
+      delay: 10
+      ignore_errors: yes
+
+    - name: Show deployment status
+      debug:
+        msg: |
+          Tomcat deployed successfully on port 8081
+          Application URL: http://{{ ansible_host }}:8081/myapp
+          {% if deployment_result.status == 200 %}
+          Application is responding correctly
+          {% else %}
+          Application might be starting up or having issues
+          {% endif %}
