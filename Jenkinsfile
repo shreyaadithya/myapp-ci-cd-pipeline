@@ -67,10 +67,16 @@ pipeline {
          stage('Deploy using Ansible') {
             steps {
                 // Use ssh-agent with your Jenkins stored private key
-                sshagent(['my-ssh-key']) {
-                    ansiblePlaybook(
-                        inventory: 'hosts',
-                        playbook: 'deploy.yml'
+                //sshagent(['my-ssh-key']) {
+                    //ansiblePlaybook(
+                        //inventory: 'hosts',
+                        //playbook: 'deploy.yml'
+                 ansiblePlaybook(
+                             inventory: 'hosts',
+                              playbook: 'deploy.yml',
+                              credentialsId: 'my-ssh-key'
+                              )
+   
                     )
                 }
             }
