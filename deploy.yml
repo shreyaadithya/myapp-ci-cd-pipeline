@@ -1,18 +1,116 @@
-- hosts: webservers
+//- hosts: webservers
+  //become: yes
+  //tasks:
+    //- name: Stop Tomcat
+      //systemd:
+        //name: tomcat
+        //state: stopped
+
+    //- name: Copy WAR to Tomcat webapps
+      //copy:
+        //src: target/myapp-1.0.0.war
+        //dest: /opt/tomcat/webapps/myapp.war
+        //mode: '0644'
+
+    //- name: Start Tomcat
+      //systemd:
+        //name: tomcat
+        //state: started 
+
+
+        - hosts: webservers
   become: yes
+  vars:
+    tomcat_version: "10.1.14"
+    tomcat_install_dir: "/opt/tomcat"
+    tomcat_port: 9090        # Change to your desired port
+    java_home: "/usr/lib/jvm/java-17-openjdk-amd64"
+    tomcat_user: "ubuntu"    # The user running Tomcat
+    war_source: "target/myapp-1.0.0.war"
+    war_dest: "{{ tomcat_install_dir }}/webapps/myapp.war"
+
   tasks:
-    - name: Stop Tomcat
+    - name: Update apt and install dependencies
+      apt:
+        name:
+          - openjdk-17-jdk
+          - wget
+        update_cache: yes
+
+    - name: Download Tomcat
+      get_url:
+        url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+
+    - name: Extract Tomcat
+      unarchive:
+        src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "/opt/"
+        remote_src: yes
+
+    - name: Rename Tomcat folder
+      command: mv /opt/apache-tomcat-{{ tomcat_version }} {{ tomcat_install_dir }}
+      args:
+        creates: "{{ tomcat_install_dir }}"
+
+    - name: Make Tomcat scripts executable
+      file:
+        path: "{{ tomcat_install_dir }}/bin"
+        recurse: yes
+        mode: '0755'
+
+    - name: Change Tomcat port
+      replace:
+        path: "{{ tomcat_install_dir }}/conf/server.xml"
+        regexp: 'port="8080"'
+        replace: 'port="{{ tomcat_port }}"'
+
+    - name: Create systemd service for Tomcat
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        content: |
+          [Unit]
+          Description=Apache Tomcat Web Application Container
+          After=network.target
+
+          [Service]
+          Type=forking
+          User={{ tomcat_user }}
+          Group={{ tomcat_user }}
+          Environment=JAVA_HOME={{ java_home }}
+          Environment=CATALINA_PID={{ tomcat_install_dir }}/temp/tomcat.pid
+          Environment=CATALINA_HOME={{ tomcat_install_dir }}
+          Environment=CATALINA_BASE={{ tomcat_install_dir }}
+          ExecStart={{ tomcat_install_dir }}/bin/catalina.sh start
+          ExecStop={{ tomcat_install_dir }}/bin/catalina.sh stop
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start Tomcat
+      systemd:
+        name: tomcat
+        enabled: yes
+        state: started
+
+    - name: Stop Tomcat before WAR deployment
       systemd:
         name: tomcat
         state: stopped
 
-    - name: Copy WAR to Tomcat webapps
+    - name: Deploy WAR file to Tomcat webapps
       copy:
-        src: target/myapp-1.0.0.war
-        dest: /opt/tomcat/webapps/myapp.war
+        src: "{{ war_source }}"
+        dest: "{{ war_dest }}"
         mode: '0644'
 
-    - name: Start Tomcat
+    - name: Start Tomcat after WAR deployment
       systemd:
         name: tomcat
         state: started
+
