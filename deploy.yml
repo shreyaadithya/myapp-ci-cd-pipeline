@@ -1,146 +1,123 @@
 ---
-- name: Install Tomcat and Deploy Application
+- name: Deploy Application using Apache HTTPD
   hosts: webservers
   become: yes
   vars:
-    tomcat_version: 10.1.30
-    tomcat_home: /opt/tomcat
     app_name: myapp
+    web_root: /var/www/html
 
   tasks:
-    - name: Debug - Check current directory structure
-      shell: |
-        ls -la /opt/
-        ls -la /opt/tomcat 2>/dev/null || echo "Tomcat not installed"
-      register: dir_structure
-
-    - name: Show directory structure
-      debug:
-        var: dir_structure.stdout
-
-    - name: Update apt cache and install dependencies
+    - name: Update apt cache and install Apache HTTPD
       apt:
         update_cache: yes
         name:
-          - openjdk-17-jdk
-          - wget
+          - apache2
         state: present
 
-    - name: Check if Tomcat directory exists
-      stat:
-        path: "{{ tomcat_home }}"
-      register: tomcat_dir
+    - name: Ensure Apache is started and enabled
+      systemd:
+        name: apache2
+        state: started
+        enabled: yes
 
-    - name: Show Tomcat directory status
-      debug:
-        var: tomcat_dir.stat.exists
-
-    - name: Download Tomcat if not exists
-      get_url:
-        url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
-        dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
-      when: not tomcat_dir.stat.exists
-
-    - name: Extract Tomcat if not exists
-      unarchive:
-        src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
-        dest: /opt/
-        remote_src: yes
-        owner: ubuntu
-        group: ubuntu
-      when: not tomcat_dir.stat.exists
-
-    - name: Create Tomcat symlink if not exists
+    - name: Create application directory
       file:
-        src: "/opt/apache-tomcat-{{ tomcat_version }}"
-        dest: "{{ tomcat_home }}"
-        state: link
-        force: yes
-        owner: ubuntu
-        group: ubuntu
-      when: not tomcat_dir.stat.exists
+        path: "{{ web_root }}/{{ app_name }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
 
-    - name: Check if Tomcat was installed successfully
-      shell: |
-        ls -la "{{ tomcat_home }}"
-        ls -la "{{ tomcat_home }}/conf/" 2>/dev/null || echo "Conf directory not found"
-      register: tomcat_check
+    - name: Copy web application files
+      copy:
+        src: "webapp/"
+        dest: "{{ web_root }}/{{ app_name }}"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+        directory_mode: '0755'
 
-    - name: Show Tomcat installation result
+    - name: Create Apache virtual host configuration
+      copy:
+        dest: /etc/apache2/sites-available/{{ app_name }}.conf
+        content: |
+          <VirtualHost *:80>
+              ServerName {{ ansible_host }}
+              DocumentRoot {{ web_root }}/{{ app_name }}
+              
+              <Directory {{ web_root }}/{{ app_name }}>
+                  Options Indexes FollowSymLinks
+                  AllowOverride All
+                  Require all granted
+              </Directory>
+              
+              ErrorLog ${APACHE_LOG_DIR}/{{ app_name }}_error.log
+              CustomLog ${APACHE_LOG_DIR}/{{ app_name }}_access.log combined
+          </VirtualHost>
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Enable the new virtual host
+      command: a2ensite {{ app_name }}.conf
+      notify: restart apache
+
+    - name: Disable default virtual host
+      command: a2dissite 000-default.conf
+      notify: restart apache
+
+    - name: Enable required Apache modules
+      command: "a2enmod {{ item }}"
+      with_items:
+        - rewrite
+      notify: restart apache
+
+    - name: Reload Apache configuration
+      systemd:
+        name: apache2
+        state: reloaded
+
+    - name: Wait for Apache to be ready
+      wait_for:
+        port: 80
+        delay: 5
+        state: started
+        timeout: 60
+
+    - name: Check application status
+      uri:
+        url: "http://localhost/{{ app_name }}/"
+        method: GET
+        status_code: 200
+        timeout: 30
+      register: app_status
+      until: app_status.status == 200
+      retries: 5
+      delay: 10
+
+    - name: Show deployment results
       debug:
-        var: tomcat_check.stdout
+        msg: |
+          ==================== DEPLOYMENT SUMMARY ====================
+          ✅ Application deployed successfully!
+          
+          Application URL: http://{{ ansible_host }}/{{ app_name }}/
+          Web Root: {{ web_root }}/{{ app_name }}
+          Apache Status: Running on port 80
+          
+          Files deployed:
+          - index.html (test page)
+          - myapp-1.0-SNAPSHOT.war (your application)
+          
+          Troubleshooting:
+          - Check Apache logs: tail -f /var/log/apache2/{{ app_name }}_error.log
+          - Check Apache status: systemctl status apache2
+          - Test manually: curl http://localhost/{{ app_name }}/
+          
+          ============================================================
 
-    - name: Continue with configuration only if Tomcat exists
-      block:
-        - name: Change Tomcat port to 8081
-          replace:
-            path: "{{ tomcat_home }}/conf/server.xml"
-            regexp: 'port="8080"'
-            replace: 'port="8081"'
-            backup: yes
-
-        - name: Create Tomcat systemd service file
-          copy:
-            dest: /etc/systemd/system/tomcat.service
-            content: |
-              [Unit]
-              Description=Apache Tomcat Web Application Container
-              After=network.target
-
-              [Service]
-              Type=forking
-              User=ubuntu
-              Group=ubuntu
-              Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-              Environment=CATALINA_PID={{ tomcat_home }}/temp/tomcat.pid
-              Environment=CATALINA_HOME={{ tomcat_home }}
-              Environment=CATALINA_BASE={{ tomcat_home }}
-              ExecStart={{ tomcat_home }}/bin/startup.sh
-              ExecStop={{ tomcat_home }}/bin/shutdown.sh
-              Restart=on-failure
-              RestartSec=10
-
-              [Install]
-              WantedBy=multi-user.target
-            owner: root
-            group: root
-            mode: '0644'
-
-        - name: Set proper permissions on Tomcat directories
-          file:
-            path: "{{ tomcat_home }}"
-            owner: ubuntu
-            group: ubuntu
-            recurse: yes
-
-        - name: Create Tomcat temp directory
-          file:
-            path: "{{ tomcat_home }}/temp"
-            state: directory
-            owner: ubuntu
-            group: ubuntu
-            mode: '0755'
-
-        - name: Reload systemd daemon
-          systemd:
-            daemon_reload: yes
-
-        - name: Enable Tomcat service
-          systemd:
-            name: tomcat
-            enabled: yes
-
-        - name: Copy WAR file to Tomcat webapps
-          copy:
-            src: "myapp.war"
-            dest: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
-            owner: ubuntu
-            group: ubuntu
-            mode: '0644'
-
-        - name: Start Tomcat service
-          systemd:
-            name: tomcat
-            state: started
-
-      when: tomcat_dir.stat.exists
+  handlers:
+    - name: restart apache
+      systemd:
+        name: apache2
+        state: restarted
