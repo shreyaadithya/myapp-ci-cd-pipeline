@@ -52,7 +52,7 @@ pipeline {
        // }
         stage('Upload to Artifactory') {
     steps {
-        withCredentials([usernamePassword(credentialsId: 'artifactory-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+        withCredentials([usernamePassword(credentialsId: 'shreyaadithya28@gmail.com/******', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
             sh """
                 curl -u $USER:$PASS -T target/myapp-1.0-SNAPSHOT.war \
                 "http://<your-artifactory-server>:8081/artifactory/libs-snapshot-local/myapp-1.0-SNAPSHOT.war"
