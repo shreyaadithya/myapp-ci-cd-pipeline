@@ -1,43 +1,116 @@
 ---
-- name: Deploy Application to Tomcat
+- name: Install Tomcat and Deploy Application
   hosts: webservers
   become: yes
   vars:
+    tomcat_version: 10.1.30
     tomcat_home: /opt/tomcat
     app_name: myapp
 
   tasks:
-    - name: Check if Tomcat is installed
+    - name: Update apt cache and install dependencies
+      apt:
+        update_cache: yes
+        name:
+          - openjdk-17-jdk
+          - wget
+        state: present
+
+    - name: Check if Tomcat is already installed
       stat:
         path: "{{ tomcat_home }}"
-      register: tomcat_exists
+      register: tomcat_installed
 
-    - name: Fail if Tomcat is not installed
-      fail:
-        msg: |
-          Tomcat is not installed at {{ tomcat_home }}. 
-          Please install Tomcat manually first with:
-          sudo apt update
-          sudo apt install openjdk-17-jdk wget -y
-          wget https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30.tar.gz
-          tar -xzf apache-tomcat-10.1.30.tar.gz -C /opt/
-          ln -s /opt/apache-tomcat-10.1.30 /opt/tomcat
-      when: not tomcat_exists.stat.exists
+    - name: Download Tomcat
+      get_url:
+        url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+      when: not tomcat_installed.stat.exists
 
-    - name: Check Tomcat service status
+    - name: Extract Tomcat
+      unarchive:
+        src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: /opt/
+        remote_src: yes
+        owner: ubuntu
+        group: ubuntu
+      when: not tomcat_installed.stat.exists
+
+    - name: Create Tomcat symlink
+      file:
+        src: "/opt/apache-tomcat-{{ tomcat_version }}"
+        dest: "{{ tomcat_home }}"
+        state: link
+        force: yes
+        owner: ubuntu
+        group: ubuntu
+      when: not tomcat_installed.stat.exists
+
+    - name: Change Tomcat port to 8081
+      replace:
+        path: "{{ tomcat_home }}/conf/server.xml"
+        regexp: 'port="8080"'
+        replace: 'port="8081"'
+        backup: yes
+
+    - name: Create Tomcat systemd service file
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        content: |
+          [Unit]
+          Description=Apache Tomcat Web Application Container
+          After=network.target
+
+          [Service]
+          Type=forking
+          User=ubuntu
+          Group=ubuntu
+          Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          Environment=CATALINA_PID={{ tomcat_home }}/temp/tomcat.pid
+          Environment=CATALINA_HOME={{ tomcat_home }}
+          Environment=CATALINA_BASE={{ tomcat_home }}
+          ExecStart={{ tomcat_home }}/bin/startup.sh
+          ExecStop={{ tomcat_home }}/bin/shutdown.sh
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Set proper permissions on Tomcat directories
+      file:
+        path: "{{ tomcat_home }}"
+        owner: ubuntu
+        group: ubuntu
+        recurse: yes
+
+    - name: Create Tomcat temp directory if it doesn't exist
+      file:
+        path: "{{ tomcat_home }}/temp"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable Tomcat service
       systemd:
         name: tomcat
-      register: tomcat_service
-      ignore_errors: yes
+        enabled: yes
 
     - name: Stop Tomcat service if running
       systemd:
         name: tomcat
         state: stopped
-      when: tomcat_service.status is defined and tomcat_service.status.ActiveState == 'active'
       ignore_errors: yes
 
-    - name: Clean existing deployment
+    - name: Clean existing webapps
       file:
         path: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
         state: absent
@@ -89,9 +162,14 @@
         state: started
         timeout: 120
 
-    - name: Wait for application to deploy
+    - name: Wait for application to deploy (give it time to unpack)
       pause:
         seconds: 30
+
+    - name: Check Tomcat status
+      systemd:
+        name: tomcat
+      register: tomcat_status
 
     - name: Check application status
       uri:
@@ -100,7 +178,7 @@
         status_code: 200, 404, 503
         timeout: 30
       register: app_status
-      until: app_status.status != 503
+      until: app_status.status == 200 or app_status.status == 404
       retries: 10
       delay: 10
       ignore_errors: yes
@@ -108,19 +186,26 @@
     - name: Show deployment results
       debug:
         msg: |
-          Deployment Summary:
-          - Tomcat URL: http://{{ ansible_host }}:8081
-          - Application URL: http://{{ ansible_host }}:8081/{{ app_name }}
-          - Application Status: {{ app_status.status }}
+          ==================== DEPLOYMENT SUMMARY ====================
+          Tomcat Status: {{ tomcat_status.status.ActiveState }}
+          Tomcat Home: {{ tomcat_home }}
+          Tomcat URL: http://{{ ansible_host }}:8081
+          Application URL: http://{{ ansible_host }}:8081/{{ app_name }}
+          Application HTTP Status: {{ app_status.status }}
 
           {% if app_status.status == 200 %}
-          ✅ Application deployed successfully and is responding
+          ✅ SUCCESS: Application deployed and responding correctly!
           {% elif app_status.status == 404 %}
-          ⚠️  Application deployed but context path might be different
-          Try: http://{{ ansible_host }}:8081/
+          ⚠️  WARNING: Application deployed but context path might be different.
+          Try accessing: http://{{ ansible_host }}:8081/
           {% else %}
-          🔧 Application might still be starting up
+          🔧 INFO: Application might still be starting up.
           {% endif %}
 
-          To check Tomcat logs: journalctl -u tomcat -f
-          To check application: curl http://localhost:8081/{{ app_name }}
+          Troubleshooting Commands:
+          - Check Tomcat logs: journalctl -u tomcat -f
+          - Check application: curl http://localhost:8081/{{ app_name }}
+          - Check Tomcat process: ps aux | grep tomcat
+          - Check deployed apps: ls -la {{ tomcat_home }}/webapps/
+
+          ============================================================
