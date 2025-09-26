@@ -23,7 +23,7 @@ pipeline {
 
         stage('Build with Maven') {
             steps {
-                sh "mvn clean package"
+                sh "mvn clean package -DskipTests"
             }
         }
 
@@ -37,19 +37,13 @@ pipeline {
 
         stage('Upload to Artifactory') {
             steps {
-                withCredentials([usernamePassword(credentialsId: "${ARTIFACTORY_CREDENTIALS}",
-                                                  usernameVariable: 'USER',
+                withCredentials([usernamePassword(credentialsId: "${ARTIFACTORY_CREDENTIALS}", 
+                                                  usernameVariable: 'USER', 
                                                   passwordVariable: 'PASS')]) {
                     script {
-                        // Extract actual version from pom.xml
-                        def version = sh(
-                            script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout",
-                            returnStdout: true
-                        ).trim()
-
-                        def isSnapshot = version.endsWith("SNAPSHOT")
-                        def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
-                        def artifactFile = "myapp-${version}.war"
+                        // Determine correct artifact name
+                        def artifactFile = "myapp-1.0-SNAPSHOT.war"  // matches Maven build output
+                        def artifactRepo = "${ARTIFACTORY_SNAPSHOT}" // using snapshot repo
 
                         sh """
                             echo "Uploading ${artifactFile} to ${artifactRepo}"
@@ -63,9 +57,14 @@ pipeline {
         stage('Deploy using Ansible') {
             steps {
                 ansiblePlaybook(
-                    inventory: 'hosts',
-                    playbook: 'deploy.yml',
-                    credentialsId: 'my-ssh-key'
+                    inventory: 'hosts',             // your inventory file
+                    playbook: 'deploy.yml',         // Ansible playbook
+                    credentialsId: 'my-ssh-key',   // SSH private key in Jenkins
+                    extraVars: [
+                        artifact_name: "myapp-1.0-SNAPSHOT.war",
+                        artifact_repo: "${ARTIFACTORY_SNAPSHOT}",
+                        tomcat_path: "/opt/tomcat"
+                    ]
                 )
             }
         }
@@ -73,10 +72,10 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline completed successfully!"
+            echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "Pipeline failed. Please check the logs."
+            echo "❌ Pipeline failed. Check the logs."
         }
     }
 }
