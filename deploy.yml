@@ -1,152 +1,65 @@
 ---
-- name: Install and Configure Tomcat
+- name: Deploy Application to Tomcat
   hosts: webservers
   become: yes
   vars:
-    tomcat_version: 10.1.30
-    tomcat_url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
-    artifactory_base: "https://trial6dfohe.jfrog.io/artifactory"
+    tomcat_home: /opt/tomcat
+    app_name: myapp
 
   tasks:
-    - name: Update apt cache and install dependencies
-      apt:
-        update_cache: yes
-        name:
-          - openjdk-17-jdk
-          - wget
-          - curl
-        state: present
-
-    - name: Check if Tomcat directory exists
+    - name: Check if Tomcat is installed
       stat:
-        path: /opt/tomcat
-      register: tomcat_dir
+        path: "{{ tomcat_home }}"
+      register: tomcat_exists
 
-    - name: Check if Tomcat is installed (via systemd)
-      systemd:
-        name: tomcat
-      register: tomcat_service
-      ignore_errors: yes
+    - name: Fail if Tomcat is not installed
+      fail:
+        msg: "Tomcat is not installed at {{ tomcat_home }}. Please install Tomcat first."
+      when: not tomcat_exists.stat.exists
 
-    - name: Download Tomcat if not installed
-      get_url:
-        url: "{{ tomcat_url }}"
-        dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
-        mode: '0755'
-      when: not tomcat_dir.stat.exists
-
-    - name: Extract Tomcat if not installed
-      unarchive:
-        src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
-        dest: /opt/
-        remote_src: yes
-        owner: ubuntu
-        group: ubuntu
-      when: not tomcat_dir.stat.exists
-
-    - name: Create Tomcat symlink if not installed
-      file:
-        src: "/opt/apache-tomcat-{{ tomcat_version }}"
-        dest: /opt/tomcat
-        state: link
-        force: yes
-        owner: ubuntu
-        group: ubuntu
-      when: not tomcat_dir.stat.exists
-
-    - name: Check if server.xml exists before modifying
-      stat:
-        path: /opt/tomcat/conf/server.xml
-      register: server_xml
-
-    - name: Change Tomcat port to 8081
-      replace:
-        path: /opt/tomcat/conf/server.xml
-        regexp: 'port="8080"'
-        replace: 'port="8081"'
-        backup: yes
-      when: server_xml.stat.exists
-
-    - name: Create Tomcat systemd service file
-      copy:
-        dest: /etc/systemd/system/tomcat.service
-        content: |
-          [Unit]
-          Description=Apache Tomcat Web Application Container
-          After=network.target
-
-          [Service]
-          Type=forking
-          User=ubuntu
-          Group=ubuntu
-          Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          Environment=CATALINA_PID=/opt/tomcat/temp/tomcat.pid
-          Environment=CATALINA_HOME=/opt/tomcat
-          Environment=CATALINA_BASE=/opt/tomcat
-          ExecStart=/opt/tomcat/bin/startup.sh
-          ExecStop=/opt/tomcat/bin/shutdown.sh
-          Restart=on-failure
-          RestartSec=10
-
-          [Install]
-          WantedBy=multi-user.target
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Set proper permissions on Tomcat directories
-      file:
-        path: /opt/tomcat
-        owner: ubuntu
-        group: ubuntu
-        recurse: yes
-      when: tomcat_dir.stat.exists
-
-    - name: Reload systemd daemon
-      systemd:
-        daemon_reload: yes
-
-    - name: Enable Tomcat service
-      systemd:
-        name: tomcat
-        enabled: yes
-
-    - name: Stop Tomcat service if running
+    - name: Stop Tomcat service
       systemd:
         name: tomcat
         state: stopped
       ignore_errors: yes
 
-    - name: Clean existing webapps
+    - name: Clean existing deployment
       file:
-        path: /opt/tomcat/webapps/myapp.war
+        path: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
         state: absent
       ignore_errors: yes
 
     - name: Clean existing exploded deployment
       file:
-        path: /opt/tomcat/webapps/myapp
+        path: "{{ tomcat_home }}/webapps/{{ app_name }}"
         state: absent
       ignore_errors: yes
 
-    - name: Download WAR file from Artifactory
-      get_url:
-        url: "{{ artifactory_base }}/libs-snapshot-local/myapp-1.0-SNAPSHOT.war"
-        dest: /opt/tomcat/webapps/myapp.war
-        mode: '0644'
+    - name: Copy WAR file from Jenkins workspace
+      copy:
+        src: "{{ war_file_path }}"
+        dest: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
         owner: ubuntu
         group: ubuntu
+        mode: '0644'
+      when: war_file_path is defined
+
+    - name: Alternative - Download WAR from Artifactory (if copy fails)
+      get_url:
+        url: "https://trial6dfohe.jfrog.io/artifactory/libs-snapshot-local/myapp-1.0-SNAPSHOT.war"
+        dest: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+      when: war_file_path is not defined
       ignore_errors: yes
 
-    - name: Alternative WAR download (if above fails)
-      get_url:
-        url: "{{ artifactory_base }}/libs-release-local/myapp-1.0.war"
-        dest: /opt/tomcat/webapps/myapp.war
-        mode: '0644'
+    - name: Set proper permissions on webapps directory
+      file:
+        path: "{{ tomcat_home }}/webapps"
         owner: ubuntu
         group: ubuntu
-      when: false  # Disabled for now, enable if you have release versions
-      ignore_errors: yes
+        recurse: yes
 
     - name: Start Tomcat service
       systemd:
@@ -158,28 +71,43 @@
         port: 8081
         delay: 10
         state: started
-        timeout: 60
+        timeout: 120
 
-    - name: Check application health
+    - name: Wait for application to deploy
+      wait_for:
+        port: 8081
+        delay: 15
+        state: started
+        timeout: 180
+
+    - name: Check application status
       uri:
-        url: "http://localhost:8081/myapp"
+        url: "http://localhost:8081/{{ app_name }}"
         method: GET
-        status_code: 200
+        status_code: 200, 404, 503
         timeout: 30
-      register: deployment_result
-      until: deployment_result.status == 200
-      retries: 5
+      register: app_status
+      until: app_status.status != 503
+      retries: 10
       delay: 10
       ignore_errors: yes
 
-    - name: Show deployment status
+    - name: Show deployment results
       debug:
         msg: |
-          Tomcat deployed on port 8081
-          Application URL: http://{{ ansible_host }}:8081/myapp
-          {% if deployment_result.status == 200 %}
-          ✅ Application is responding correctly
+          Deployment Summary:
+          - Tomcat URL: http://{{ ansible_host }}:8081
+          - Application URL: http://{{ ansible_host }}:8081/{{ app_name }}
+          - Application Status: {{ app_status.status }}
+          - Tomcat Home: {{ tomcat_home }}
+
+          {% if app_status.status == 200 %}
+          ✅ Application deployed successfully and is responding
+          {% elif app_status.status == 404 %}
+          ⚠️  Application deployed but context path might be different
           {% else %}
-          ⚠️  Application might be starting up or having issues
-          Check logs with: journalctl -u tomcat -f
+          🔧 Application might still be starting up
           {% endif %}
+
+          To check Tomcat logs: journalctl -u tomcat -f
+          To check application: curl http://localhost:8081/{{ app_name }}
