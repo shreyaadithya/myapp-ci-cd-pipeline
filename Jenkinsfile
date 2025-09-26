@@ -11,6 +11,7 @@ pipeline {
         ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-release'
         ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-snapshot'
         ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'  // Jenkins credential ID
+        ANSIBLE_HOST_KEY_CHECKING = 'False' // Disable host key checking in CI/CD
     }
 
     stages {
@@ -54,13 +55,24 @@ pipeline {
             }
         }
 
-        stage('Deploy using Ansible') {
+        //stage('Deploy using Ansible') {
+            //steps {
+                //ansiblePlaybook(
+                    //credentialsId: 'ssh-key',  // Make sure this exists in Jenkins
+                    //inventory: 'hosts',
+                    //playbook: 'deploy.yml'
+               // )
+            //}
+        //}
+         stage('Deploy using Ansible') {
             steps {
-                ansiblePlaybook(
-                    credentialsId: 'ssh-key',  // Make sure this exists in Jenkins
-                    inventory: 'hosts',
-                    playbook: 'deploy.yml'
-                )
+                // Use ssh-agent with your Jenkins stored private key
+                sshagent(['ssh-key']) {
+                    ansiblePlaybook(
+                        inventory: 'hosts',
+                        playbook: 'deploy.yml'
+                    )
+                }
             }
         }
     }
