@@ -8,7 +8,7 @@ pipeline {
 
     environment {
         SONARQUBE = 'SonarQube'
-        ARTIFACTORY = 'Artifactory'
+        ARTIFACTORY = 'artifactory-server' // Must match Artifactory server ID in Jenkins
     }
 
     stages {
@@ -32,23 +32,22 @@ pipeline {
             }
         }
 
-        //stage('Quality Gate') {
-            //steps {
-                //timeout(time: 5, unit: 'MINUTES') {
-                    //waitForQualityGate abortPipeline: true
-                //}
-            //}
-        //}
-
         stage('Upload to Artifactory') {
             steps {
-                rtMavenRun (
-                    tool: 'Maven-3.8.8',
-                    pom: 'pom.xml',
-                    goals: 'clean install',
-                    resolverId: 'maven-resolver',
-                    deployerId: 'maven-deployer'
-                )
+                script {
+                    def server = Artifactory.server("${ARTIFACTORY}")
+
+                    def rtMaven = Artifactory.newMavenBuild()
+                    rtMaven.tool = 'Maven-3.8.8'
+
+                    // Configure resolver and deployer
+                    rtMaven.deployer releaseRepo: 'libs-release-local', snapshotRepo: 'libs-snapshot-local', server: server
+                    rtMaven.resolver releaseRepo: 'libs-release', snapshotRepo: 'libs-snapshot', server: server
+
+                    // Run Maven build & publish to Artifactory
+                    rtMaven.run pom: 'pom.xml', goals: 'clean install'
+                    server.publishBuildInfo(rtMaven)
+                }
             }
         }
 
