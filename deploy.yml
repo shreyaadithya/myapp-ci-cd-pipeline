@@ -18,22 +18,48 @@
         #state: started 
 
 
-- hosts: webservers
+---
+- name: Deploy Tomcat Application with systemd
+  hosts: all
   become: yes
+
   vars:
     tomcat_version: 10.1.30
-    tomcat_url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+    tomcat_url: "https://archive.apache.org/dist/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+    tomcat_install_dir: /opt/tomcat
+    tomcat_user: tomcat
+    tomcat_group: tomcat
+    tomcat_port: 8085   # ✅ Changed port
 
   tasks:
-    - name: Update apt and install dependencies
+    - name: Ensure Java is installed
       apt:
-        update_cache: yes
-        name:
-          - openjdk-17-jdk
-          - wget
+        name: openjdk-17-jdk
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Create Tomcat group
+      group:
+        name: "{{ tomcat_group }}"
         state: present
 
-    - name: Download Tomcat
+    - name: Create Tomcat user
+      user:
+        name: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+        shell: /bin/false
+        system: yes
+        create_home: no
+
+    - name: Create Tomcat installation directory
+      file:
+        path: "{{ tomcat_install_dir }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+
+    - name: Download Tomcat archive
       get_url:
         url: "{{ tomcat_url }}"
         dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
@@ -41,55 +67,72 @@
     - name: Extract Tomcat
       unarchive:
         src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
-        dest: /opt/
+        dest: "{{ tomcat_install_dir }}"
         remote_src: yes
+        creates: "{{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+      notify: Restart Tomcat
 
-    - name: Symlink Tomcat
+    - name: Set permissions on Tomcat directory
       file:
-        src: "/opt/apache-tomcat-{{ tomcat_version }}"
-        dest: /opt/tomcat
-        state: link
-        force: yes
+        path: "{{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+        state: directory
+        recurse: yes
+        owner: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
 
-    - name: Change Tomcat port to 8081
+    - name: Update Tomcat port in server.xml
       replace:
-        path: /opt/tomcat/conf/server.xml
+        path: "{{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}/conf/server.xml"
         regexp: 'port="8080"'
-        replace: 'port="8081"'
+        replace: 'port="{{ tomcat_port }}"'
+      notify: Restart Tomcat
 
-    - name: Create systemd service
+    - name: Create systemd service for Tomcat
       copy:
         dest: /etc/systemd/system/tomcat.service
         content: |
           [Unit]
-          Description=Apache Tomcat Web Application Container
+          Description=Apache Tomcat {{ tomcat_version }}
           After=network.target
 
           [Service]
           Type=forking
-          User=ubuntu
-          Group=ubuntu
-          Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          Environment=CATALINA_PID=/opt/tomcat/temp/tomcat.pid
-          Environment=CATALINA_HOME=/opt/tomcat
-          Environment=CATALINA_BASE=/opt/tomcat
-          ExecStart=/opt/tomcat/bin/startup.sh
-          ExecStop=/opt/tomcat/bin/shutdown.sh
+
+          User={{ tomcat_user }}
+          Group={{ tomcat_group }}
+
+          Environment="JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
+          Environment="CATALINA_HOME={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+          Environment="CATALINA_BASE={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+          Environment="CATALINA_PID={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}/temp/tomcat.pid"
+
+          ExecStart={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}/bin/startup.sh
+          ExecStop={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}/bin/shutdown.sh
+
           Restart=on-failure
 
           [Install]
           WantedBy=multi-user.target
+      notify: Restart Tomcat
 
-    - name: Reload systemd
-      command: systemctl daemon-reload
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
 
-    - name: Enable Tomcat
+    - name: Enable Tomcat service
       systemd:
         name: tomcat
         enabled: yes
 
-    - name: Start Tomcat
+    - name: Start Tomcat service
       systemd:
         name: tomcat
         state: started
+
+  handlers:
+    - name: Restart Tomcat
+      systemd:
+        name: tomcat
+        state: restarted
+
 
