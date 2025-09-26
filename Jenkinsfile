@@ -10,8 +10,8 @@ pipeline {
         SONARQUBE = 'SonarQube'
         ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local'
         ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-snapshot-local'
-        ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'  // Jenkins credential ID
-        ANSIBLE_HOST_KEY_CHECKING = 'False' // Disable host key checking in CI/CD
+        ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'
+        ANSIBLE_HOST_KEY_CHECKING = 'False'
     }
 
     stages {
@@ -54,8 +54,12 @@ pipeline {
                         // List files for debugging
                         sh "ls -la target/"
                         
-                        def isSnapshot = env.BRANCH_NAME?.contains("SNAPSHOT") || env.BRANCH_NAME == "main"
+                        // Determine if this is a snapshot build
+                        def isSnapshot = readFile('pom.xml').contains('-SNAPSHOT')
                         def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
+                        
+                        echo "Is SNAPSHOT build: ${isSnapshot}"
+                        echo "Using repository: ${artifactRepo}"
                         
                         // Dynamically find the WAR file
                         def warFiles = sh(script: "find target/ -name '*.war' -type f", returnStdout: true).trim()
@@ -70,25 +74,7 @@ pipeline {
                                 curl -u $USER:$PASS -T ${warFile} "${artifactRepo}/${artifactFile}"
                             """
                         } else {
-                            // Fallback: try common WAR file names
-                            def commonWarNames = ["myapp.war", "myapp-1.0.war", "myapp-1.0-SNAPSHOT.war"]
-                            def foundWar = false
-                            
-                            for (warName in commonWarNames) {
-                                def warPath = "target/${warName}"
-                                if (fileExists(warPath)) {
-                                    sh """
-                                        echo "Uploading ${warName} to ${artifactRepo}"
-                                        curl -u $USER:$PASS -T ${warPath} "${artifactRepo}/${warName}"
-                                    """
-                                    foundWar = true
-                                    break
-                                }
-                            }
-                            
-                            if (!foundWar) {
-                                error "No WAR file found in target directory! Available files: ${sh(script: 'ls -la target/', returnStdout: true)}"
-                            }
+                            error "No WAR file found in target directory!"
                         }
                     }
                 }
