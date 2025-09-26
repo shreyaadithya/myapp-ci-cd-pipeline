@@ -27,16 +27,6 @@ pipeline {
             }
         }
 
-        stage('Diagnose Build Output') {
-            steps {
-                sh """
-                    echo "=== Checking build output ==="
-                    ls -la target/
-                    find target/ -name '*.war' -type f
-                """
-            }
-        }
-
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv("${SONARQUBE}") {
@@ -51,9 +41,6 @@ pipeline {
                                                   usernameVariable: 'USER',
                                                   passwordVariable: 'PASS')]) {
                     script {
-                        // List files for debugging
-                        sh "ls -la target/"
-                        
                         // Determine if this is a snapshot build
                         def isSnapshot = readFile('pom.xml').contains('-SNAPSHOT')
                         def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
@@ -61,22 +48,54 @@ pipeline {
                         echo "Is SNAPSHOT build: ${isSnapshot}"
                         echo "Using repository: ${artifactRepo}"
                         
-                        // Dynamically find the WAR file
-                        def warFiles = sh(script: "find target/ -name '*.war' -type f", returnStdout: true).trim()
+                        // Use the correct WAR file name
+                        def warFile = "target/myapp-1.0-SNAPSHOT.war"
+                        def artifactName = "myapp-1.0-SNAPSHOT.war"
                         
-                        if (warFiles) {
-                            def warFile = warFiles.split('\n')[0].trim()
-                            def artifactFile = warFile.replace('target/', '')
-                            
+                        // Try different Artifactory API endpoints
+                        def uploadUrls = [
+                            "${artifactRepo}/${artifactName}",
+                            "${artifactRepo}/myapp/${artifactName}",
+                            "${artifactRepo}/com/myapp/myapp/1.0-SNAPSHOT/${artifactName}"
+                        ]
+                        
+                        def uploadSuccess = false
+                        
+                        for (uploadUrl in uploadUrls) {
+                            try {
+                                sh """
+                                    echo "Trying to upload to: ${uploadUrl}"
+                                    curl -f -u $USER:$PASS -X PUT -T ${warFile} "${uploadUrl}"
+                                """
+                                echo "✅ Upload successful to: ${uploadUrl}"
+                                uploadSuccess = true
+                                break
+                            } catch (Exception e) {
+                                echo "❌ Upload failed to: ${uploadUrl}"
+                                echo "Error: ${e.getMessage()}"
+                            }
+                        }
+                        
+                        if (!uploadSuccess) {
+                            // Fallback: simple upload without structured path
                             sh """
-                                echo "Found WAR file: ${warFile}"
-                                echo "Uploading ${artifactFile} to ${artifactRepo}"
-                                curl -u $USER:$PASS -T ${warFile} "${artifactRepo}/${artifactFile}"
+                                echo "Trying simple upload..."
+                                curl -f -u $USER:$PASS -X PUT -T ${warFile} "${artifactRepo}/"
                             """
-                        } else {
-                            error "No WAR file found in target directory!"
                         }
                     }
+                }
+            }
+        }
+
+        stage('Prepare for Deployment') {
+            steps {
+                script {
+                    // Copy the WAR file to a known location for Ansible
+                    sh """
+                        cp target/myapp-1.0-SNAPSHOT.war myapp.war
+                        ls -la myapp.war
+                    """
                 }
             }
         }
@@ -86,7 +105,8 @@ pipeline {
                 ansiblePlaybook(
                     playbook: 'deploy.yml',
                     inventory: 'hosts',
-                    credentialsId: 'my-ssh-key'
+                    credentialsId: 'my-ssh-key',
+                    extras: '--extra-vars "war_file_path=${WORKSPACE}/myapp.war"'
                 )
             }
         }
