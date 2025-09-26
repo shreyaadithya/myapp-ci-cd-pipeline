@@ -9,6 +9,7 @@ pipeline {
     environment {
         SONARQUBE = 'SonarQube'
         ANSIBLE_HOST_KEY_CHECKING = 'False'
+        APP_NAME = 'myapp'
     }
 
     stages {
@@ -35,13 +36,11 @@ pipeline {
         stage('Prepare for Deployment') {
             steps {
                 script {
-                    // Create a simple HTML version for HTTPD deployment
+                    // Prepare the webapp directory with WAR file
                     sh """
                         mkdir -p webapp
-                        cp target/myapp-1.0-SNAPSHOT.war webapp/ || true
-                        # Create a simple index.html for testing
-                        echo '<html><body><h1>MyApp Deployment Successful!</h1><p>Application is running on Apache HTTPD</p><p>WAR file: myapp-1.0-SNAPSHOT.war</p></body></html>' > webapp/index.html
-                        echo "Web application prepared for deployment:"
+                        cp target/myapp-1.0-SNAPSHOT.war webapp/
+                        echo "Application WAR file prepared for deployment:"
                         ls -la webapp/
                     """
                 }
@@ -53,7 +52,8 @@ pipeline {
                 ansiblePlaybook(
                     playbook: 'deploy.yml',
                     inventory: 'hosts',
-                    credentialsId: 'my-ssh-key'
+                    credentialsId: 'my-ssh-key',
+                    extras: "--extra-vars 'app_name=${APP_NAME}'"
                 )
             }
         }
