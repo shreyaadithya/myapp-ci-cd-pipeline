@@ -1,17 +1,13 @@
 pipeline {
     agent any
 
-    tools {
-        maven 'Maven-3.8.8'
-        jdk 'jdk-17'
-    }
-
     environment {
-        SONARQUBE = 'SonarQube'
-        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local'
-        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-snapshot-local'
-        ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'  // Jenkins credential ID
-        ANSIBLE_HOST_KEY_CHECKING = 'False'
+        MVN_HOME = tool name: 'Maven', type: 'maven'
+        ARTIFACTORY_USER = credentials('artifactory_user')   // Jenkins credential ID
+        ARTIFACTORY_API_KEY = credentials('artifactory_api_key')
+        ARTIFACT_NAME = "myapp-1.0-SNAPSHOT.war"
+        ARTIFACTORY_REPO = "libs-snapshot-local"
+        ARTIFACTORY_URL = "https://trial6dfohe.jfrog.io/artifactory/${ARTIFACTORY_REPO}/${ARTIFACT_NAME}"
     }
 
     stages {
@@ -21,66 +17,51 @@ pipeline {
             }
         }
 
-        stage('Build with Maven') {
+        stage('Build') {
             steps {
-                sh "mvn clean package -DskipTests"
+                sh "${MVN_HOME}/bin/mvn clean package -DskipTests"
             }
         }
 
         stage('SonarQube Analysis') {
+            environment {
+                SONAR_HOST_URL = 'http://54.91.93.239:9000'
+                SONAR_AUTH_TOKEN = credentials('sonarqube_token')
+            }
             steps {
-                withSonarQubeEnv("${SONARQUBE}") {
-                    sh "mvn sonar:sonar -Dsonar.projectKey=myapp"
+                withSonarQubeEnv('SonarQube') {
+                    sh "${MVN_HOME}/bin/mvn sonar:sonar -Dsonar.projectKey=myapp"
                 }
             }
         }
 
         stage('Upload to Artifactory') {
             steps {
-                withCredentials([usernamePassword(credentialsId: "${ARTIFACTORY_CREDENTIALS}", 
-                                                  usernameVariable: 'USER', 
-                                                  passwordVariable: 'PASS')]) {
-                    script {
-                        def isSnapshot = env.BUILD_TAG?.contains('SNAPSHOT') || true
-                        def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
-                        def artifactFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
-
-                        sh """
-                            echo "Uploading ${artifactFile} to ${artifactRepo}"
-                            curl -u $USER:$PASS -T target/${artifactFile} "${artifactRepo}/${artifactFile}"
-                        """
-                    }
-                }
+                sh """
+                    curl -u ${ARTIFACTORY_USER}:${ARTIFACTORY_API_KEY} \
+                         -T target/${ARTIFACT_NAME} \
+                         ${ARTIFACTORY_URL}
+                """
             }
         }
 
         stage('Deploy using Ansible') {
             steps {
-                script {
-                    def isSnapshot = env.BUILD_TAG?.contains('SNAPSHOT') || true
-                    def warFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
-                    def artifactoryRepo = isSnapshot ? ARTIFACTORY_SNAPSHOT : ARTIFACTORY_RELEASE
-
-                    ansiblePlaybook(
-                        inventory: 'hosts',
-                        playbook: 'deploy.yml',
-                        credentialsId: 'my-ssh-key',
-                        extraVars: [
-                            war_name: warFile,
-                            artifactory_url: "${artifactoryRepo}/${warFile}"
-                        ]
-                    )
-                }
+                ansiblePlaybook(
+                    playbook: 'deploy.yml',
+                    inventory: 'hosts',
+                    extras: "-e artifactory_user=${ARTIFACTORY_USER} -e artifactory_api_key=${ARTIFACTORY_API_KEY} -e artifact_name=${ARTIFACT_NAME}"
+                )
             }
         }
     }
 
     post {
         success {
-            echo "✅ Pipeline completed successfully!"
+            echo "✅ Pipeline succeeded"
         }
         failure {
-            echo "❌ Pipeline failed. Please check the logs."
+            echo "❌ Pipeline failed. Check logs."
         }
     }
 }
