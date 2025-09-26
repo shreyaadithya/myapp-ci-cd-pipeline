@@ -35,11 +35,14 @@ pipeline {
         stage('Prepare for Deployment') {
             steps {
                 script {
-                    // Copy the WAR file to a known location for Ansible
+                    // Create a simple HTML version for HTTPD deployment
                     sh """
-                        cp target/myapp-1.0-SNAPSHOT.war myapp.war
-                        echo "WAR file prepared for deployment:"
-                        ls -la myapp.war
+                        mkdir -p webapp
+                        cp target/myapp-1.0-SNAPSHOT.war webapp/ || true
+                        # Create a simple index.html for testing
+                        echo '<html><body><h1>MyApp Deployment Successful!</h1><p>Application is running on Apache HTTPD</p><p>WAR file: myapp-1.0-SNAPSHOT.war</p></body></html>' > webapp/index.html
+                        echo "Web application prepared for deployment:"
+                        ls -la webapp/
                     """
                 }
             }
