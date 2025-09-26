@@ -8,7 +8,8 @@ pipeline {
 
     environment {
         SONARQUBE = 'SonarQube'
-        ARTIFACTORY = 'artifactory-server' // Must match Artifactory server ID in Jenkins
+        ARTIFACTORY_URL = 'https://trial6dfohe.jfrog.io/artifactory' // Replace with your Artifactory URL
+        ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'       // Jenkins credential ID
     }
 
     stages {
@@ -26,50 +27,42 @@ pipeline {
 
         stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('SonarQube') {
+                withSonarQubeEnv("${SONARQUBE}") {
                     sh "mvn sonar:sonar -Dsonar.projectKey=myapp"
                 }
             }
         }
 
-        //stage('Upload to Artifactory') {
-            //steps {
-                //script {
-                    //def server = Artifactory.server("${ARTIFACTORY}")
-
-                    //def rtMaven = Artifactory.newMavenBuild()
-                    //rtMaven.tool = 'Maven-3.8.8'
-
-                    //// Configure resolver and deployer
-                    //rtMaven.deployer releaseRepo: 'libs-release-local', snapshotRepo: 'libs-snapshot-local', server: server
-                    //rtMaven.resolver releaseRepo: 'libs-release', snapshotRepo: 'libs-snapshot', server: server
-
-                    //// Run Maven build & publish to Artifactory
-                    //rtMaven.run pom: 'pom.xml', goals: 'clean install'
-                    //server.publishBuildInfo(rtMaven)
-               // }
-           // }
-       // }
         stage('Upload to Artifactory') {
-    steps {
-        withCredentials([usernamePassword(credentialsId: 'shreyaadithya28@gmail.com/******', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-            sh """
-                curl -u $USER:$PASS -T target/myapp-1.0-SNAPSHOT.war \
-                "http://<your-artifactory-server>:8081/artifactory/libs-snapshot-local/myapp-1.0-SNAPSHOT.war"
-            """
+            steps {
+                withCredentials([usernamePassword(credentialsId: "${ARTIFACTORY_CREDENTIALS}", 
+                                                  usernameVariable: 'USER', 
+                                                  passwordVariable: 'PASS')]) {
+                    sh """
+                        curl -u $USER:$PASS -T target/myapp-1.0-SNAPSHOT.war \
+                        "${ARTIFACTORY_URL}/libs-snapshot-local/myapp-1.0-SNAPSHOT.war"
+                    """
+                }
+            }
         }
-    }
-}
-
 
         stage('Deploy using Ansible') {
             steps {
                 ansiblePlaybook(
-                    credentialsId: 'ssh-key',
+                    credentialsId: 'ssh-key',  // Make sure this exists in Jenkins
                     inventory: 'hosts',
                     playbook: 'deploy.yml'
                 )
             }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline completed successfully!"
+        }
+        failure {
+            echo "Pipeline failed. Please check the logs."
         }
     }
 }
