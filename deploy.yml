@@ -19,32 +19,71 @@
 
 
 ---
-- name: Deploy myapp WAR to Tomcat
-  hosts: target
+- name: Deploy myapp to Tomcat
+  hosts: target-node
   become: yes
   vars:
-    artifact_url: "{{ artifact_repo }}/{{ artifact_name }}"
-    deploy_path: "{{ tomcat_path }}/webapps/myapp.war"
+    tomcat_path: /opt/tomcat
+    deploy_user: tomcat
+    war_name: "{{ war_name | default('myapp.war') }}"
+    artifactory_url: "{{ artifactory_url | default('') }}"
+    deploy_path: "{{ tomcat_path }}/webapps/{{ war_name }}"
+    app_url: "http://{{ inventory_hostname }}:8085/myapp/"
+
   tasks:
     - name: Download WAR from Artifactory
       get_url:
-        url: "{{ artifact_url }}"
+        url: "{{ artifactory_url }}"
         dest: "{{ deploy_path }}"
         mode: '0644'
+      register: download_result
+
+    - name: Verify WAR file exists
+      stat:
+        path: "{{ deploy_path }}"
+      register: war_file
+
+    - name: Fail if WAR not found
+      fail:
+        msg: "WAR file not found at {{ deploy_path }}. Check Artifactory URL or credentials."
+      when: not war_file.stat.exists
+
+    - name: Change ownership to Tomcat user
+      file:
+        path: "{{ deploy_path }}"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: '0644'
+
+    - name: Remove old exploded directory if exists
+      file:
+        path: "{{ tomcat_path }}/webapps/myapp"
+        state: absent
 
     - name: Restart Tomcat
       systemd:
         name: tomcat
         state: restarted
+        enabled: yes
 
-    - name: Ensure WAR deployed
-      stat:
-        path: "{{ tomcat_path }}/webapps/myapp.war"
-      register: war_file
+    - name: Wait for Tomcat to start
+      wait_for:
+        port: 8085
+        host: "{{ inventory_hostname }}"
+        timeout: 60
 
-    - name: Debug deployment status
-      debug:
-        msg: "WAR deployment successful!" 
-      when: war_file.stat.exists
+    - name: Verify application is up
+      uri:
+        url: "{{ app_url }}"
+        status_code: 200
+      register: app_status
+      retries: 5
+      delay: 10
+      until: app_status.status == 200
 
+    - name: Show Tomcat logs
+      shell: tail -n 20 {{ tomcat_path }}/logs/catalina.out
+      register: tomcat_logs
 
+    - debug:
+        msg: "{{ tomcat_logs.stdout }}"
