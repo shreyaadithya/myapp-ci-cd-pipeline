@@ -1,44 +1,129 @@
 ---
-- name: Simple Web Application Deployment
+- name: Deploy Spring Boot Application
   hosts: webservers
   become: yes
 
   tasks:
-    - name: Install Apache HTTPD
+    - name: Install Java
       apt:
-        name: apache2
+        name: openjdk-17-jdk
         state: present
         update_cache: yes
 
-    - name: Start and enable Apache
+    - name: Create application directory
+      file:
+        path: /opt/{{ app_name }}
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Copy WAR file to server
+      copy:
+        src: "webapp/myapp-1.0-SNAPSHOT.war"
+        dest: /opt/{{ app_name }}/{{ app_name }}.war
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+
+    - name: Create systemd service for Spring Boot app
+      copy:
+        dest: /etc/systemd/system/{{ app_name }}.service
+        content: |
+          [Unit]
+          Description=MyApp Spring Boot Application
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=ubuntu
+          Group=ubuntu
+          WorkingDirectory=/opt/{{ app_name }}
+          ExecStart=/usr/bin/java -jar {{ app_name }}.war
+          ExecStop=/bin/kill -15 $MAINPID
+          Restart=on-failure
+          RestartSec=10
+          Environment=SPRING_PROFILES_ACTIVE=prod
+          Environment=SERVER_PORT=8080
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Stop existing application if running
       systemd:
-        name: apache2
+        name: "{{ app_name }}"
+        state: stopped
+      ignore_errors: yes
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start Spring Boot application
+      systemd:
+        name: "{{ app_name }}"
         state: started
         enabled: yes
 
-    - name: Clean existing web root
-      file:
-        path: /var/www/html
-        state: directory
-        owner: www-data
-        group: www-data
-        mode: '0755'
+    - name: Wait for application to start
+      wait_for:
+        port: 8080
+        delay: 10
+        state: started
+        timeout: 120
 
-    - name: Deploy simple application page
+    - name: Check application health
+      uri:
+        url: "http://localhost:8080/"
+        method: GET
+        status_code: 200
+        timeout: 30
+      register: app_status
+      until: app_status.status == 200
+      retries: 10
+      delay: 10
+      ignore_errors: yes
+
+    - name: Configure Apache as reverse proxy
       copy:
-        src: "webapp/index.html"
-        dest: /var/www/html/index.html
-        owner: www-data
-        group: www-data
+        dest: /etc/apache2/sites-available/{{ app_name }}-proxy.conf
+        content: |
+          <VirtualHost *:80>
+              ServerName {{ ansible_host }}
+              
+              ProxyPreserveHost On
+              ProxyPass / http://localhost:8080/
+              ProxyPassReverse / http://localhost:8080/
+              
+              ErrorLog ${APACHE_LOG_DIR}/{{ app_name }}_error.log
+              CustomLog ${APACHE_LOG_DIR}/{{ app_name }}_access.log combined
+          </VirtualHost>
+        owner: root
+        group: root
         mode: '0644'
 
-    - name: Deploy WAR file for download/backup
-      copy:
-        src: "webapp/myapp-1.0-SNAPSHOT.war"
-        dest: /var/www/html/myapp.war
-        owner: www-data
-        group: www-data
-        mode: '0644'
+    - name: Enable proxy modules
+      command: "a2enmod {{ item }}"
+      with_items:
+        - proxy
+        - proxy_http
+      notify: restart apache
+
+    - name: Enable application proxy site
+      command: a2ensite {{ app_name }}-proxy.conf
+      notify: restart apache
+
+    - name: Disable default site
+      command: a2dissite 000-default.conf
+      notify: restart apache
+
+    - name: Restart Apache to apply proxy configuration
+      systemd:
+        name: apache2
+        state: restarted
 
     - name: Wait for Apache to be ready
       wait_for:
@@ -47,24 +132,41 @@
         state: started
         timeout: 30
 
-    - name: Test the deployment
+    - name: Final health check through proxy
       uri:
         url: "http://localhost/"
         method: GET
         status_code: 200
-        timeout: 10
+        timeout: 30
+      register: final_status
+      until: final_status.status == 200
+      retries: 5
+      delay: 10
+      ignore_errors: yes
 
-    - name: Show deployment info
+    - name: Show deployment results
       debug:
         msg: |
-          🎉 Deployment Successful!!!
+          🎉 SPRING BOOT APPLICATION DEPLOYED SUCCESSFULLY!
           
-          Your application is now deployed at:
-          🌐 http://{{ ansible_host }}/
+          Application URLs:
+          🌐 Direct: http://{{ ansible_host }}:8080/
+          🌐 Through Apache: http://{{ ansible_host }}/
           
-          WAR file is available at:
-          📦 http://{{ ansible_host }}/myapp.war
+          Application Details:
+          📦 WAR file: /opt/{{ app_name }}/{{ app_name }}.war
+          🔧 Service: {{ app_name }}.service
+          🚀 Port: 8080
           
-          To check status:
-          🔍 systemctl status apache2
-          📊 tail -f /var/log/apache2/access.log
+          Management Commands:
+          🔍 Check app: systemctl status {{ app_name }}
+          📊 App logs: journalctl -u {{ app_name }} -f
+          🌐 Apache logs: tail -f /var/log/apache2/{{ app_name }}_access.log
+          
+          Deployment verified: {{ final_status.status == 200 }}
+
+  handlers:
+    - name: restart apache
+      systemd:
+        name: apache2
+        state: restarted
