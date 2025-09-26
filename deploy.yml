@@ -14,13 +14,27 @@
 
     - name: Fail if Tomcat is not installed
       fail:
-        msg: "Tomcat is not installed at {{ tomcat_home }}. Please install Tomcat first."
+        msg: |
+          Tomcat is not installed at {{ tomcat_home }}. 
+          Please install Tomcat manually first with:
+          sudo apt update
+          sudo apt install openjdk-17-jdk wget -y
+          wget https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30.tar.gz
+          tar -xzf apache-tomcat-10.1.30.tar.gz -C /opt/
+          ln -s /opt/apache-tomcat-10.1.30 /opt/tomcat
       when: not tomcat_exists.stat.exists
 
-    - name: Stop Tomcat service
+    - name: Check Tomcat service status
+      systemd:
+        name: tomcat
+      register: tomcat_service
+      ignore_errors: yes
+
+    - name: Stop Tomcat service if running
       systemd:
         name: tomcat
         state: stopped
+      when: tomcat_service.status is defined and tomcat_service.status.ActiveState == 'active'
       ignore_errors: yes
 
     - name: Clean existing deployment
@@ -35,24 +49,26 @@
         state: absent
       ignore_errors: yes
 
-    - name: Copy WAR file from Jenkins workspace
-      copy:
-        src: "{{ war_file_path }}"
-        dest: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
-        owner: ubuntu
-        group: ubuntu
-        mode: '0644'
-      when: war_file_path is defined
+    - name: Create temporary directory for WAR file transfer
+      tempfile:
+        state: directory
+        suffix: "_war_transfer"
+      register: temp_dir
 
-    - name: Alternative - Download WAR from Artifactory (if copy fails)
-      get_url:
-        url: "https://trial6dfohe.jfrog.io/artifactory/libs-snapshot-local/myapp-1.0-SNAPSHOT.war"
+    - name: Copy WAR file from Jenkins workspace to temporary directory
+      copy:
+        src: "myapp.war"
+        dest: "{{ temp_dir.path }}/{{ app_name }}.war"
+        mode: '0644'
+
+    - name: Copy WAR file to Tomcat webapps
+      copy:
+        src: "{{ temp_dir.path }}/{{ app_name }}.war"
         dest: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
         owner: ubuntu
         group: ubuntu
         mode: '0644'
-      when: war_file_path is not defined
-      ignore_errors: yes
+        remote_src: yes
 
     - name: Set proper permissions on webapps directory
       file:
@@ -74,11 +90,8 @@
         timeout: 120
 
     - name: Wait for application to deploy
-      wait_for:
-        port: 8081
-        delay: 15
-        state: started
-        timeout: 180
+      pause:
+        seconds: 30
 
     - name: Check application status
       uri:
@@ -99,12 +112,12 @@
           - Tomcat URL: http://{{ ansible_host }}:8081
           - Application URL: http://{{ ansible_host }}:8081/{{ app_name }}
           - Application Status: {{ app_status.status }}
-          - Tomcat Home: {{ tomcat_home }}
 
           {% if app_status.status == 200 %}
           ✅ Application deployed successfully and is responding
           {% elif app_status.status == 404 %}
           ⚠️  Application deployed but context path might be different
+          Try: http://{{ ansible_host }}:8081/
           {% else %}
           🔧 Application might still be starting up
           {% endif %}
