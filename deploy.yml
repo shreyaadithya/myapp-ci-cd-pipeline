@@ -18,72 +18,77 @@
         #state: started 
 
 
----
-- name: Deploy myapp to Tomcat
-  hosts: all
+- hosts: webservers
   become: yes
   vars:
-    tomcat_path: /opt/tomcat
-    deploy_user: tomcat
-    war_name: "{{ war_name | default('myapp.war') }}"
-    artifactory_url: "{{ artifactory_url | default('') }}"
-    deploy_path: "{{ tomcat_path }}/webapps/{{ war_name }}"
-    app_url: "http://{{ inventory_hostname }}:8085/myapp/"
+    tomcat_version: 10.1.30
+    tomcat_url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
 
   tasks:
-    - name: Download WAR from Artifactory
+    - name: Update apt and install dependencies
+      apt:
+        update_cache: yes
+        name:
+          - openjdk-17-jdk
+          - wget
+        state: present
+
+    - name: Download Tomcat
       get_url:
-        url: "{{ artifactory_url }}"
-        dest: "{{ deploy_path }}"
-        mode: '0644'
-      register: download_result
+        url: "{{ tomcat_url }}"
+        dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
 
-    - name: Verify WAR file exists
-      stat:
-        path: "{{ deploy_path }}"
-      register: war_file
+    - name: Extract Tomcat
+      unarchive:
+        src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: /opt/
+        remote_src: yes
 
-    - name: Fail if WAR not found
-      fail:
-        msg: "WAR file not found at {{ deploy_path }}. Check Artifactory URL or credentials."
-      when: not war_file.stat.exists
-
-    - name: Change ownership to Tomcat user
+    - name: Symlink Tomcat
       file:
-        path: "{{ deploy_path }}"
-        owner: "{{ deploy_user }}"
-        group: "{{ deploy_user }}"
-        mode: '0644'
+        src: "/opt/apache-tomcat-{{ tomcat_version }}"
+        dest: /opt/tomcat
+        state: link
+        force: yes
 
-    - name: Remove old exploded directory if exists
-      file:
-        path: "{{ tomcat_path }}/webapps/myapp"
-        state: absent
+    - name: Change Tomcat port to 8081
+      replace:
+        path: /opt/tomcat/conf/server.xml
+        regexp: 'port="8080"'
+        replace: 'port="8081"'
 
-    - name: Restart Tomcat
+    - name: Create systemd service
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        content: |
+          [Unit]
+          Description=Apache Tomcat Web Application Container
+          After=network.target
+
+          [Service]
+          Type=forking
+          User=ubuntu
+          Group=ubuntu
+          Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          Environment=CATALINA_PID=/opt/tomcat/temp/tomcat.pid
+          Environment=CATALINA_HOME=/opt/tomcat
+          Environment=CATALINA_BASE=/opt/tomcat
+          ExecStart=/opt/tomcat/bin/startup.sh
+          ExecStop=/opt/tomcat/bin/shutdown.sh
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd
+      command: systemctl daemon-reload
+
+    - name: Enable Tomcat
       systemd:
         name: tomcat
-        state: restarted
         enabled: yes
 
-    - name: Wait for Tomcat to start
-      wait_for:
-        port: 8085
-        host: "{{ inventory_hostname }}"
-        timeout: 60
-
-    - name: Verify application is up
-      uri:
-        url: "{{ app_url }}"
-        status_code: 200
-      register: app_status
-      retries: 5
-      delay: 10
-      until: app_status.status == 200
-
-    - name: Show Tomcat logs
-      shell: tail -n 20 {{ tomcat_path }}/logs/catalina.out
-      register: tomcat_logs
-
-    - debug:
-        msg: "{{ tomcat_logs.stdout }}"
+    - name: Start Tomcat
+      systemd:
+        name: tomcat
+        state: started
