@@ -46,12 +46,18 @@
         group: ubuntu
       when: not tomcat_installed.stat.exists
 
+    - name: Check if server.xml exists
+      stat:
+        path: "{{ tomcat_home }}/conf/server.xml"
+      register: server_xml_exists
+
     - name: Change Tomcat port to 8081
       replace:
         path: "{{ tomcat_home }}/conf/server.xml"
         regexp: 'port="8080"'
         replace: 'port="8081"'
         backup: yes
+      when: server_xml_exists.stat.exists
 
     - name: Create Tomcat systemd service file
       copy:
@@ -122,26 +128,13 @@
         state: absent
       ignore_errors: yes
 
-    - name: Create temporary directory for WAR file transfer
-      tempfile:
-        state: directory
-        suffix: "_war_transfer"
-      register: temp_dir
-
-    - name: Copy WAR file from Jenkins workspace to temporary directory
-      copy:
-        src: "myapp.war"
-        dest: "{{ temp_dir.path }}/{{ app_name }}.war"
-        mode: '0644'
-
     - name: Copy WAR file to Tomcat webapps
       copy:
-        src: "{{ temp_dir.path }}/{{ app_name }}.war"
+        src: "myapp.war"
         dest: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
         owner: ubuntu
         group: ubuntu
         mode: '0644'
-        remote_src: yes
 
     - name: Set proper permissions on webapps directory
       file:
