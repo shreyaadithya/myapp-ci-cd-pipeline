@@ -18,23 +18,25 @@
         #state: started 
 
 
+---
 - hosts: webservers
   become: yes
   vars:
-    tomcat_version: "10.1.14"
+    tomcat_version: "10.1.27"  # Change to the version you want
     tomcat_install_dir: "/opt/tomcat"
-    tomcat_port: 9090        # Change to your desired port
-    java_home: "/usr/lib/jvm/java-17-openjdk-amd64"
-    tomcat_user: "ubuntu"    # The user running Tomcat
+    tomcat_service_user: "ubuntu"
+    tomcat_port: 8081         # Change to your desired port
     war_source: "target/myapp-1.0.0.war"
     war_dest: "{{ tomcat_install_dir }}/webapps/myapp.war"
 
   tasks:
+
     - name: Update apt and install dependencies
       apt:
-        name:
+        name: 
           - openjdk-17-jdk
           - wget
+        state: present
         update_cache: yes
 
     - name: Download Tomcat
@@ -45,25 +47,28 @@
     - name: Extract Tomcat
       unarchive:
         src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
-        dest: "/opt/"
+        dest: /opt/
         remote_src: yes
 
-    - name: Rename Tomcat folder
+    - name: Rename Tomcat directory
       command: mv /opt/apache-tomcat-{{ tomcat_version }} {{ tomcat_install_dir }}
       args:
         creates: "{{ tomcat_install_dir }}"
 
-    - name: Make Tomcat scripts executable
+    - name: Make scripts executable
       file:
-        path: "{{ tomcat_install_dir }}/bin"
-        recurse: yes
+        path: "{{ tomcat_install_dir }}/bin/{{ item }}"
         mode: '0755'
+      loop:
+        - startup.sh
+        - shutdown.sh
 
-    - name: Change Tomcat port
-      replace:
+    - name: Configure Tomcat port
+      lineinfile:
         path: "{{ tomcat_install_dir }}/conf/server.xml"
-        regexp: 'port="8080"'
-        replace: 'port="{{ tomcat_port }}"'
+        regexp: '(<Connector port=").*?(")'
+        line: '\1{{ tomcat_port }}\2'
+        backrefs: yes
 
     - name: Create systemd service for Tomcat
       copy:
@@ -75,41 +80,40 @@
 
           [Service]
           Type=forking
-          User={{ tomcat_user }}
-          Group={{ tomcat_user }}
-          Environment=JAVA_HOME={{ java_home }}
+          User={{ tomcat_service_user }}
+          Group={{ tomcat_service_user }}
+          Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           Environment=CATALINA_PID={{ tomcat_install_dir }}/temp/tomcat.pid
           Environment=CATALINA_HOME={{ tomcat_install_dir }}
           Environment=CATALINA_BASE={{ tomcat_install_dir }}
-          ExecStart={{ tomcat_install_dir }}/bin/catalina.sh start
-          ExecStop={{ tomcat_install_dir }}/bin/catalina.sh stop
+          ExecStart={{ tomcat_install_dir }}/bin/startup.sh
+          ExecStop={{ tomcat_install_dir }}/bin/shutdown.sh
           Restart=on-failure
 
           [Install]
           WantedBy=multi-user.target
 
     - name: Reload systemd
-      systemd:
-        daemon_reload: yes
+      command: systemctl daemon-reload
 
     - name: Enable and start Tomcat
       systemd:
         name: tomcat
-        enabled: yes
         state: started
+        enabled: yes
 
-    - name: Stop Tomcat before WAR deployment
+    - name: Stop Tomcat before deploying WAR
       systemd:
         name: tomcat
         state: stopped
 
-    - name: Deploy WAR file to Tomcat webapps
+    - name: Copy WAR to Tomcat webapps
       copy:
         src: "{{ war_source }}"
         dest: "{{ war_dest }}"
         mode: '0644'
 
-    - name: Start Tomcat after WAR deployment
+    - name: Start Tomcat
       systemd:
         name: tomcat
         state: started
