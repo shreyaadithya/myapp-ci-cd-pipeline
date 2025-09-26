@@ -56,7 +56,7 @@ pipeline {
             steps {
                 ansiblePlaybook(
                     credentialsId: 'ssh-key',
-                    inventory: '/home/ubuntu/hosts',
+                    inventory: 'hosts',
                     playbook: 'deploy.yml'
                 )
             }
