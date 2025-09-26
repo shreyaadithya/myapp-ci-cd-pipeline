@@ -8,6 +8,16 @@
     app_name: myapp
 
   tasks:
+    - name: Debug - Check current directory structure
+      shell: |
+        ls -la /opt/
+        ls -la /opt/tomcat 2>/dev/null || echo "Tomcat not installed"
+      register: dir_structure
+
+    - name: Show directory structure
+      debug:
+        var: dir_structure.stdout
+
     - name: Update apt cache and install dependencies
       apt:
         update_cache: yes
@@ -16,27 +26,31 @@
           - wget
         state: present
 
-    - name: Check if Tomcat is already installed
+    - name: Check if Tomcat directory exists
       stat:
         path: "{{ tomcat_home }}"
-      register: tomcat_installed
+      register: tomcat_dir
 
-    - name: Download Tomcat
+    - name: Show Tomcat directory status
+      debug:
+        var: tomcat_dir.stat.exists
+
+    - name: Download Tomcat if not exists
       get_url:
         url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
         dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
-      when: not tomcat_installed.stat.exists
+      when: not tomcat_dir.stat.exists
 
-    - name: Extract Tomcat
+    - name: Extract Tomcat if not exists
       unarchive:
         src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
         dest: /opt/
         remote_src: yes
         owner: ubuntu
         group: ubuntu
-      when: not tomcat_installed.stat.exists
+      when: not tomcat_dir.stat.exists
 
-    - name: Create Tomcat symlink
+    - name: Create Tomcat symlink if not exists
       file:
         src: "/opt/apache-tomcat-{{ tomcat_version }}"
         dest: "{{ tomcat_home }}"
@@ -44,161 +58,89 @@
         force: yes
         owner: ubuntu
         group: ubuntu
-      when: not tomcat_installed.stat.exists
+      when: not tomcat_dir.stat.exists
 
-    - name: Check if server.xml exists
-      stat:
-        path: "{{ tomcat_home }}/conf/server.xml"
-      register: server_xml_exists
+    - name: Check if Tomcat was installed successfully
+      shell: |
+        ls -la "{{ tomcat_home }}"
+        ls -la "{{ tomcat_home }}/conf/" 2>/dev/null || echo "Conf directory not found"
+      register: tomcat_check
 
-    - name: Change Tomcat port to 8081
-      replace:
-        path: "{{ tomcat_home }}/conf/server.xml"
-        regexp: 'port="8080"'
-        replace: 'port="8081"'
-        backup: yes
-      when: server_xml_exists.stat.exists
-
-    - name: Create Tomcat systemd service file
-      copy:
-        dest: /etc/systemd/system/tomcat.service
-        content: |
-          [Unit]
-          Description=Apache Tomcat Web Application Container
-          After=network.target
-
-          [Service]
-          Type=forking
-          User=ubuntu
-          Group=ubuntu
-          Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          Environment=CATALINA_PID={{ tomcat_home }}/temp/tomcat.pid
-          Environment=CATALINA_HOME={{ tomcat_home }}
-          Environment=CATALINA_BASE={{ tomcat_home }}
-          ExecStart={{ tomcat_home }}/bin/startup.sh
-          ExecStop={{ tomcat_home }}/bin/shutdown.sh
-          Restart=on-failure
-          RestartSec=10
-
-          [Install]
-          WantedBy=multi-user.target
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Set proper permissions on Tomcat directories
-      file:
-        path: "{{ tomcat_home }}"
-        owner: ubuntu
-        group: ubuntu
-        recurse: yes
-
-    - name: Create Tomcat temp directory if it doesn't exist
-      file:
-        path: "{{ tomcat_home }}/temp"
-        state: directory
-        owner: ubuntu
-        group: ubuntu
-        mode: '0755'
-
-    - name: Reload systemd daemon
-      systemd:
-        daemon_reload: yes
-
-    - name: Enable Tomcat service
-      systemd:
-        name: tomcat
-        enabled: yes
-
-    - name: Stop Tomcat service if running
-      systemd:
-        name: tomcat
-        state: stopped
-      ignore_errors: yes
-
-    - name: Clean existing webapps
-      file:
-        path: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
-        state: absent
-      ignore_errors: yes
-
-    - name: Clean existing exploded deployment
-      file:
-        path: "{{ tomcat_home }}/webapps/{{ app_name }}"
-        state: absent
-      ignore_errors: yes
-
-    - name: Copy WAR file to Tomcat webapps
-      copy:
-        src: "myapp.war"
-        dest: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
-        owner: ubuntu
-        group: ubuntu
-        mode: '0644'
-
-    - name: Set proper permissions on webapps directory
-      file:
-        path: "{{ tomcat_home }}/webapps"
-        owner: ubuntu
-        group: ubuntu
-        recurse: yes
-
-    - name: Start Tomcat service
-      systemd:
-        name: tomcat
-        state: started
-
-    - name: Wait for Tomcat to start
-      wait_for:
-        port: 8081
-        delay: 10
-        state: started
-        timeout: 120
-
-    - name: Wait for application to deploy (give it time to unpack)
-      pause:
-        seconds: 30
-
-    - name: Check Tomcat status
-      systemd:
-        name: tomcat
-      register: tomcat_status
-
-    - name: Check application status
-      uri:
-        url: "http://localhost:8081/{{ app_name }}"
-        method: GET
-        status_code: 200, 404, 503
-        timeout: 30
-      register: app_status
-      until: app_status.status == 200 or app_status.status == 404
-      retries: 10
-      delay: 10
-      ignore_errors: yes
-
-    - name: Show deployment results
+    - name: Show Tomcat installation result
       debug:
-        msg: |
-          ==================== DEPLOYMENT SUMMARY ====================
-          Tomcat Status: {{ tomcat_status.status.ActiveState }}
-          Tomcat Home: {{ tomcat_home }}
-          Tomcat URL: http://{{ ansible_host }}:8081
-          Application URL: http://{{ ansible_host }}:8081/{{ app_name }}
-          Application HTTP Status: {{ app_status.status }}
+        var: tomcat_check.stdout
 
-          {% if app_status.status == 200 %}
-          ✅ SUCCESS: Application deployed and responding correctly!
-          {% elif app_status.status == 404 %}
-          ⚠️  WARNING: Application deployed but context path might be different.
-          Try accessing: http://{{ ansible_host }}:8081/
-          {% else %}
-          🔧 INFO: Application might still be starting up.
-          {% endif %}
+    - name: Continue with configuration only if Tomcat exists
+      block:
+        - name: Change Tomcat port to 8081
+          replace:
+            path: "{{ tomcat_home }}/conf/server.xml"
+            regexp: 'port="8080"'
+            replace: 'port="8081"'
+            backup: yes
 
-          Troubleshooting Commands:
-          - Check Tomcat logs: journalctl -u tomcat -f
-          - Check application: curl http://localhost:8081/{{ app_name }}
-          - Check Tomcat process: ps aux | grep tomcat
-          - Check deployed apps: ls -la {{ tomcat_home }}/webapps/
+        - name: Create Tomcat systemd service file
+          copy:
+            dest: /etc/systemd/system/tomcat.service
+            content: |
+              [Unit]
+              Description=Apache Tomcat Web Application Container
+              After=network.target
 
-          ============================================================
+              [Service]
+              Type=forking
+              User=ubuntu
+              Group=ubuntu
+              Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+              Environment=CATALINA_PID={{ tomcat_home }}/temp/tomcat.pid
+              Environment=CATALINA_HOME={{ tomcat_home }}
+              Environment=CATALINA_BASE={{ tomcat_home }}
+              ExecStart={{ tomcat_home }}/bin/startup.sh
+              ExecStop={{ tomcat_home }}/bin/shutdown.sh
+              Restart=on-failure
+              RestartSec=10
+
+              [Install]
+              WantedBy=multi-user.target
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Set proper permissions on Tomcat directories
+          file:
+            path: "{{ tomcat_home }}"
+            owner: ubuntu
+            group: ubuntu
+            recurse: yes
+
+        - name: Create Tomcat temp directory
+          file:
+            path: "{{ tomcat_home }}/temp"
+            state: directory
+            owner: ubuntu
+            group: ubuntu
+            mode: '0755'
+
+        - name: Reload systemd daemon
+          systemd:
+            daemon_reload: yes
+
+        - name: Enable Tomcat service
+          systemd:
+            name: tomcat
+            enabled: yes
+
+        - name: Copy WAR file to Tomcat webapps
+          copy:
+            src: "myapp.war"
+            dest: "{{ tomcat_home }}/webapps/{{ app_name }}.war"
+            owner: ubuntu
+            group: ubuntu
+            mode: '0644'
+
+        - name: Start Tomcat service
+          systemd:
+            name: tomcat
+            state: started
+
+      when: tomcat_dir.stat.exists
