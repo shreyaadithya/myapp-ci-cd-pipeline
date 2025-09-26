@@ -18,23 +18,19 @@
         #state: started 
 
 
----
 - hosts: webservers
   become: yes
   vars:
-    java_package: openjdk-17-jdk
-    tomcat_version: 10.1.26
-    tomcat_install_dir: /opt/tomcat
-    tomcat_user: ubuntu
-    tomcat_group: ubuntu
-    tomcat_port: 8085
+    tomcat_version: 10.1.30
     tomcat_url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
 
   tasks:
     - name: Update apt and install dependencies
       apt:
         update_cache: yes
-        name: "{{ java_package }}"
+        name:
+          - openjdk-17-jdk
+          - wget
         state: present
 
     - name: Download Tomcat
@@ -47,30 +43,21 @@
         src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
         dest: /opt/
         remote_src: yes
-      notify:
-        - Set permissions
 
-    - name: Rename Tomcat folder
-      command: mv /opt/apache-tomcat-{{ tomcat_version }} {{ tomcat_install_dir }}
-      args:
-        removes: "{{ tomcat_install_dir }}"
-      notify:
-        - Set permissions
-
-    - name: Set executable permissions for scripts
+    - name: Symlink Tomcat
       file:
-        path: "{{ tomcat_install_dir }}/bin/"
-        recurse: yes
-        mode: "0755"
+        src: "/opt/apache-tomcat-{{ tomcat_version }}"
+        dest: /opt/tomcat
+        state: link
+        force: yes
 
-    - name: Update Tomcat port
-      lineinfile:
-        path: "{{ tomcat_install_dir }}/conf/server.xml"
+    - name: Change Tomcat port to 8081
+      replace:
+        path: /opt/tomcat/conf/server.xml
         regexp: 'port="8080"'
-        line: 'port="{{ tomcat_port }}"'
-        backrefs: yes
+        replace: 'port="8081"'
 
-    - name: Create systemd service for Tomcat
+    - name: Create systemd service
       copy:
         dest: /etc/systemd/system/tomcat.service
         content: |
@@ -80,35 +67,29 @@
 
           [Service]
           Type=forking
-          User={{ tomcat_user }}
-          Group={{ tomcat_group }}
+          User=ubuntu
+          Group=ubuntu
           Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          Environment=CATALINA_PID={{ tomcat_install_dir }}/temp/tomcat.pid
-          Environment=CATALINA_HOME={{ tomcat_install_dir }}
-          Environment=CATALINA_BASE={{ tomcat_install_dir }}
-          ExecStart={{ tomcat_install_dir }}/bin/startup.sh
-          ExecStop={{ tomcat_install_dir }}/bin/shutdown.sh
+          Environment=CATALINA_PID=/opt/tomcat/temp/tomcat.pid
+          Environment=CATALINA_HOME=/opt/tomcat
+          Environment=CATALINA_BASE=/opt/tomcat
+          ExecStart=/opt/tomcat/bin/startup.sh
+          ExecStop=/opt/tomcat/bin/shutdown.sh
           Restart=on-failure
 
           [Install]
           WantedBy=multi-user.target
 
-    - name: Reload systemd daemon
-      systemd:
-        daemon_reload: yes
+    - name: Reload systemd
+      command: systemctl daemon-reload
 
-    - name: Enable and start Tomcat
+    - name: Enable Tomcat
       systemd:
         name: tomcat
         enabled: yes
-        state: started
 
-  handlers:
-    - name: Set permissions
-      file:
-        path: "{{ tomcat_install_dir }}"
-        recurse: yes
-        owner: "{{ tomcat_user }}"
-        group: "{{ tomcat_group }}"
-        mode: "0755"
+    - name: Start Tomcat
+      systemd:
+        name: tomcat
+        state: started
 
