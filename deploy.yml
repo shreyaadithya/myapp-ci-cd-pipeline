@@ -18,7 +18,7 @@
         #state: started 
 
 
-        - hosts: webservers
+- hosts: webservers
   become: yes
   vars:
     tomcat_version: "10.1.14"
