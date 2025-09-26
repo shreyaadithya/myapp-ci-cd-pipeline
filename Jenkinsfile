@@ -8,8 +8,8 @@ pipeline {
 
     environment {
         SONARQUBE = 'SonarQube'
-        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-release'
-        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local-libs-snapshot'
+        ARTIFACTORY_RELEASE = 'https://trial6dfohe.jfrog.io/artifactory/libs-release-local'
+        ARTIFACTORY_SNAPSHOT = 'https://trial6dfohe.jfrog.io/artifactory/libs-snapshot-local'
         ARTIFACTORY_CREDENTIALS = 'artifactory-credentials'  // Jenkins credential ID
         ANSIBLE_HOST_KEY_CHECKING = 'False'
     }
@@ -41,9 +41,9 @@ pipeline {
                                                   usernameVariable: 'USER', 
                                                   passwordVariable: 'PASS')]) {
                     script {
-                        // Determine correct artifact name
-                        def artifactFile = "myapp-1.0-SNAPSHOT.war"  // matches Maven build output
-                        def artifactRepo = "${ARTIFACTORY_SNAPSHOT}" // using snapshot repo
+                        def isSnapshot = env.BUILD_TAG?.contains('SNAPSHOT') || true
+                        def artifactRepo = isSnapshot ? "${ARTIFACTORY_SNAPSHOT}" : "${ARTIFACTORY_RELEASE}"
+                        def artifactFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
 
                         sh """
                             echo "Uploading ${artifactFile} to ${artifactRepo}"
@@ -56,16 +56,21 @@ pipeline {
 
         stage('Deploy using Ansible') {
             steps {
-                ansiblePlaybook(
-                    inventory: 'hosts',             // your inventory file
-                    playbook: 'deploy.yml',         // Ansible playbook
-                    credentialsId: 'my-ssh-key',   // SSH private key in Jenkins
-                    extraVars: [
-                        artifact_name: "myapp-1.0-SNAPSHOT.war",
-                        artifact_repo: "${ARTIFACTORY_SNAPSHOT}",
-                        tomcat_path: "/opt/tomcat"
-                    ]
-                )
+                script {
+                    def isSnapshot = env.BUILD_TAG?.contains('SNAPSHOT') || true
+                    def warFile = isSnapshot ? "myapp-1.0-SNAPSHOT.war" : "myapp-1.0.war"
+                    def artifactoryRepo = isSnapshot ? ARTIFACTORY_SNAPSHOT : ARTIFACTORY_RELEASE
+
+                    ansiblePlaybook(
+                        inventory: 'hosts',
+                        playbook: 'deploy.yml',
+                        credentialsId: 'my-ssh-key',
+                        extraVars: [
+                            war_name: warFile,
+                            artifactory_url: "${artifactoryRepo}/${warFile}"
+                        ]
+                    )
+                }
             }
         }
     }
@@ -75,7 +80,7 @@ pipeline {
             echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "❌ Pipeline failed. Check the logs."
+            echo "❌ Pipeline failed. Please check the logs."
         }
     }
 }
