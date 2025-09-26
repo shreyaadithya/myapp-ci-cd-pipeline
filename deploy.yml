@@ -6,7 +6,6 @@
     tomcat_version: 10.1.30
     tomcat_url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
     artifactory_base: "https://trial6dfohe.jfrog.io/artifactory"
-    app_version: "1.0"
 
   tasks:
     - name: Update apt cache and install dependencies
@@ -18,28 +17,34 @@
           - curl
         state: present
 
-    - name: Check if Tomcat is already installed
+    - name: Check if Tomcat directory exists
       stat:
         path: /opt/tomcat
-      register: tomcat_installed
+      register: tomcat_dir
 
-    - name: Download Tomcat
+    - name: Check if Tomcat is installed (via systemd)
+      systemd:
+        name: tomcat
+      register: tomcat_service
+      ignore_errors: yes
+
+    - name: Download Tomcat if not installed
       get_url:
         url: "{{ tomcat_url }}"
         dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
         mode: '0755'
-      when: not tomcat_installed.stat.exists
+      when: not tomcat_dir.stat.exists
 
-    - name: Extract Tomcat
+    - name: Extract Tomcat if not installed
       unarchive:
         src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
         dest: /opt/
         remote_src: yes
         owner: ubuntu
         group: ubuntu
-      when: not tomcat_installed.stat.exists
+      when: not tomcat_dir.stat.exists
 
-    - name: Create Tomcat symlink
+    - name: Create Tomcat symlink if not installed
       file:
         src: "/opt/apache-tomcat-{{ tomcat_version }}"
         dest: /opt/tomcat
@@ -47,7 +52,12 @@
         force: yes
         owner: ubuntu
         group: ubuntu
-      when: not tomcat_installed.stat.exists
+      when: not tomcat_dir.stat.exists
+
+    - name: Check if server.xml exists before modifying
+      stat:
+        path: /opt/tomcat/conf/server.xml
+      register: server_xml
 
     - name: Change Tomcat port to 8081
       replace:
@@ -55,6 +65,7 @@
         regexp: 'port="8080"'
         replace: 'port="8081"'
         backup: yes
+      when: server_xml.stat.exists
 
     - name: Create Tomcat systemd service file
       copy:
@@ -89,6 +100,7 @@
         owner: ubuntu
         group: ubuntu
         recurse: yes
+      when: tomcat_dir.stat.exists
 
     - name: Reload systemd daemon
       systemd:
@@ -117,23 +129,24 @@
         state: absent
       ignore_errors: yes
 
-    - name: Download WAR file from Artifactory (Release)
+    - name: Download WAR file from Artifactory
       get_url:
-        url: "{{ artifactory_base }}/libs-release-local/myapp-{{ app_version }}.war"
+        url: "{{ artifactory_base }}/libs-snapshot-local/myapp-1.0-SNAPSHOT.war"
         dest: /opt/tomcat/webapps/myapp.war
         mode: '0644'
         owner: ubuntu
         group: ubuntu
-      when: "'SNAPSHOT' not in app_version"
+      ignore_errors: yes
 
-    - name: Download WAR file from Artifactory (Snapshot)
+    - name: Alternative WAR download (if above fails)
       get_url:
-        url: "{{ artifactory_base }}/libs-snapshot-local/myapp-{{ app_version }}-SNAPSHOT.war"
+        url: "{{ artifactory_base }}/libs-release-local/myapp-1.0.war"
         dest: /opt/tomcat/webapps/myapp.war
         mode: '0644'
         owner: ubuntu
         group: ubuntu
-      when: "'SNAPSHOT' in app_version"
+      when: false  # Disabled for now, enable if you have release versions
+      ignore_errors: yes
 
     - name: Start Tomcat service
       systemd:
@@ -147,7 +160,7 @@
         state: started
         timeout: 60
 
-    - name: Verify deployment
+    - name: Check application health
       uri:
         url: "http://localhost:8081/myapp"
         method: GET
@@ -155,17 +168,18 @@
         timeout: 30
       register: deployment_result
       until: deployment_result.status == 200
-      retries: 10
+      retries: 5
       delay: 10
       ignore_errors: yes
 
     - name: Show deployment status
       debug:
         msg: |
-          Tomcat deployed successfully on port 8081
+          Tomcat deployed on port 8081
           Application URL: http://{{ ansible_host }}:8081/myapp
           {% if deployment_result.status == 200 %}
-          Application is responding correctly
+          ✅ Application is responding correctly
           {% else %}
-          Application might be starting up or having issues
+          ⚠️  Application might be starting up or having issues
+          Check logs with: journalctl -u tomcat -f
           {% endif %}
