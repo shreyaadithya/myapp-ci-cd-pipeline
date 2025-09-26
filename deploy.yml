@@ -57,7 +57,7 @@
     - name: Show deployment info
       debug:
         msg: |
-          🎉 Deployment Successful!
+          🎉 Deployment Successful!!!
           
           Your application is now deployed at:
           🌐 http://{{ ansible_host }}/
