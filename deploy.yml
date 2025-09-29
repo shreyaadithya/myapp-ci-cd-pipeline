@@ -10,6 +10,19 @@
         state: present
         update_cache: yes
 
+    # ADD THESE APACHE INSTALLATION TASKS
+    - name: Install Apache
+      apt:
+        name: apache2
+        state: present
+        update_cache: yes
+
+    - name: Ensure Apache is running
+      systemd:
+        name: apache2
+        state: started
+        enabled: yes
+
     - name: Create application directory
       file:
         path: /opt/{{ app_name }}
@@ -87,6 +100,7 @@
       delay: 10
       ignore_errors: yes
 
+    # NOW APACHE CONFIGURATION WILL WORK
     - name: Configure Apache as reverse proxy
       copy:
         dest: /etc/apache2/sites-available/{{ app_name }}-proxy.conf
