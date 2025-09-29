@@ -15,7 +15,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/shreyaadithya/myapp-ci-cd-pipeline.git'
+                git branch: 'working', url: 'https://github.com/shreyaadithya/myapp-ci-cd-pipeline.git'
             }
         }
 
